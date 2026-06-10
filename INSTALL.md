@@ -10,23 +10,26 @@
 ## Step 1: Add Repository to Home Assistant
 
 1. Open Home Assistant
-2. Go to **Settings** → **Add-ons** (in the sidebar)
-3. Click the three-dot menu in the top right → **Repositories**
-4. Click **Create Repository**
-5. Enter the repository URL: `https://github.com/marcusmaday/reolink-nvr-ha-app`
-6. Click **Create**
+2. Go to **Settings → Apps** (in the bottom left sidebar)
+3. Click **"Install App"** button
+4. Click ⋮ (three dots) → **Repositories**
+5. Click **Create Repository**
+6. Enter the repository URL: `https://github.com/marcusmaday/reolink-nvr-ha-app`
+7. Click **Create**
+
+**Note:** In Home Assistant 2026+, "Add-ons" was renamed to "Apps"
 
 The repository will be added and you should see "Reolink NVR HA App" available.
 
-## Step 2: Install the Add-on
+## Step 2: Install the App
 
-1. In the Add-ons store, search for "Reolink NVR HA App"
+1. In **Settings → Apps**, search for "Reolink NVR HA App"
 2. Click on it and select **Install**
 3. Wait for installation to complete
 
-## Step 3: Configure the Add-on
+## Step 3: Configure the App
 
-1. Click on **Reolink NVR HA App** (in My Home Assistant sections)
+1. Click on **Reolink NVR HA App** (in your apps list)
 2. Go to the **Configuration** tab
 3. Fill in your NVR details:
 
@@ -46,9 +49,9 @@ api_port: 5000                     # API port (don't change unless needed)
 - Ensure your NVR user has API access enabled
 - Keep `api_port` as 5000 unless you have port conflicts
 
-## Step 4: Start the Add-on
+## Step 4: Start the App
 
-1. Go to the **Reolink NVR HA App** add-on page
+1. Go to the **Reolink NVR HA App** app page
 2. Click the **Start** button
 3. Check the **Logs** tab to verify it started successfully
 

@@ -47,8 +47,9 @@ NVR Hardware
 
 ### Steps
 
-1. Add the repository to Home Assistant add-ons:
-   - Settings → Add-ons → Create Add-on Repository
+1. Add the repository to Home Assistant Apps:
+   - Settings → Apps → Install App → ⋮ → Repositories → Create Repository
+   - (In Home Assistant 2026+, "Add-ons" was renamed to "Apps")
    - URL: `https://github.com/marcusmaday/reolink-nvr-ha-app`
 
 2. Install the Reolink NVR HA App add-on
@@ -190,7 +191,7 @@ html: |
 ## Troubleshooting
 
 ### Add-on won't start
-- Check add-on logs in Home Assistant (Settings → Add-ons → Reolink NVR HA App → Logs)
+- Check app logs in Home Assistant (Settings → Apps → Reolink NVR HA App → Logs)
 - Verify NVR credentials
 - Ensure NVR is reachable from HA Green
 

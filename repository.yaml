@@ -1,0 +1,6 @@
+---
+name: Reolink NVR Home Assistant App
+url: https://github.com/marcusmaday/reolink-nvr-ha-app
+maintainer: Marcus Maday <marcus@example.com>
+category: network
+description: FastAPI wrapper for Reolink NVR with advanced recording search and filtering
