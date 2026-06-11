@@ -1,4 +1,4 @@
-ARG BUILD_FROM=ghcr.io/hassio-addons/base:21.0.0
+ARG BUILD_FROM=ghcr.io/hassio-addons/base:latest
 FROM $BUILD_FROM
 
 # Install additional dependencies
