@@ -14,7 +14,7 @@
   "ports_description": {
     "5000/tcp": "API server port"
   },
-  "image": "ghcr.io/your-org/reolink-enhanced-api:{arch}",
+  "image": "ghcr.io/marcusmaday/reolink-nvr-ha-app:{arch}",
   "options": {
     "nvr_host": "192.168.1.100",
     "nvr_port": 80,
@@ -45,8 +45,8 @@
   },
   "requirements": ["ghcr.io/hassio-addons/base:latest"],
   "homeassistant": "2024.1.0",
-  "documentation": "https://github.com/your-org/reolink-enhanced-api/wiki",
-  "support": "https://github.com/your-org/reolink-enhanced-api/issues",
-  "repository": "https://github.com/your-org/reolink-enhanced-api",
+  "documentation": "https://github.com/marcusmaday/reolink-nvr-ha-app",
+  "support": "https://github.com/marcusmaday/reolink-nvr-ha-app/issues",
+  "repository": "https://github.com/marcusmaday/reolink-nvr-ha-app",
   "issues": "https://github.com/your-org/reolink-enhanced-api/issues"
 }

@@ -16,8 +16,8 @@
 1. In Home Assistant, go to **Settings → System → Supervisor** (or look for the terminal/supervisor icon)
 2. Navigate to **App Store**
 3. Click the **⋮ (three-dot menu)** and select **Repositories**
-4. Add repository URL: `https://github.com/YOUR-USERNAME/reolink-nvr-ha-app`
-   (Replace YOUR-USERNAME with your actual GitHub username)
+4. Add repository URL: `https://github.com/marcusmaday/reolink-nvr-ha-app`
+   (This is the complete repository URL with all the code)
 5. Click **Create**
 6. Search for **"Reolink Enhanced"** in the App Store
 7. Click **Install**
@@ -167,7 +167,7 @@ Replace `YOUR-USERNAME` with your actual GitHub username.
 
 1. In Home Assistant, go to **Settings → System → Supervisor** → **App Store**
 2. Click **⋮ (menu)** → **Repositories**
-3. Paste: `https://github.com/YOUR-USERNAME/reolink-nvr-ha-app`
+3. Paste: `https://github.com/marcusmaday/reolink-nvr-ha-app`
 4. Click **Create**
 5. Search for "Reolink Enhanced" and install!
 
@@ -202,7 +202,7 @@ Once you have the repository set up, you can submit it to the official Home Assi
 ## Support
 
 For issues and feature requests:
-- GitHub: https://github.com/your-org/reolink-enhanced-api/issues
-- Wiki: https://github.com/your-org/reolink-enhanced-api/wiki
+- GitHub: https://github.com/marcusmaday/reolink-nvr-ha-app/issues
+- Repository: https://github.com/marcusmaday/reolink-nvr-ha-app
 
 See [IMPLEMENTATION_GUIDE.md](IMPLEMENTATION_GUIDE.md) for detailed documentation.
