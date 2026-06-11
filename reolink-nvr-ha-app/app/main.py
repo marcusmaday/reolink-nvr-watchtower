@@ -1,22 +1,35 @@
 """
-Reolink NVR Home Assistant App - FastAPI Backend
+Reolink NVR Home Assistant Enhanced API - FastAPI Backend
 
-REST API wrapper around Reolink NVR API for advanced recording search and filtering.
+Complete REST + WebSocket API for Reolink NVR integration with Home Assistant.
+Features:
+  - Recording search and filtering
+  - Event timeline indexing
+  - Video clip generation
+  - Real-time event streaming (WebSocket)
+  - Storage management
 """
 
-import os
 import logging
+import asyncio
 from datetime import datetime
 from typing import Optional, List
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Query, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, Query, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+import uvicorn
 
-from reolink_aio.api import Host
-from reolink_aio.exceptions import ReolinkError
-
+# Import our custom modules
+from config import get_config, AppConfig
+from nvr_client import NVRClient
+from event_stream import EventStream, Event, EventType
+from video_buffer import VideoBufferManager
+from clip_generator import ClipGenerator, ClipMetadata
+from timeline_index import TimelineIndex, TimelineEntry
+from storage_manager import StorageManager
 from reolink_search import search_recordings, get_channels_info, EVENT_TYPE_MAP
 
 # ─── Config (from env / HA add-on options) ────────────────────────────────────

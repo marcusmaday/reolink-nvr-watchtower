@@ -4,3 +4,5 @@ pydantic==2.9.2
 aiohttp==3.10.10
 reolink-aio>=0.13.3
 python-multipart==0.0.12
+websockets==14.1
+python-dotenv==1.0.1

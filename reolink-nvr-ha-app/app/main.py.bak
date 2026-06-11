@@ -1,0 +1,536 @@
+"""
+Reolink NVR Home Assistant Enhanced API - FastAPI Backend
+
+Complete REST + WebSocket API for Reolink NVR integration with Home Assistant.
+Features:
+  - Recording search and filtering
+  - Event timeline indexing
+  - Video clip generation
+  - Real-time event streaming (WebSocket)
+  - Storage management
+"""
+
+import logging
+import asyncio
+from datetime import datetime
+from typing import Optional, List
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, Query, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+import uvicorn
+
+# Import our custom modules
+from config import get_config, AppConfig
+from nvr_client import NVRClient
+from event_stream import EventStream, Event, EventType
+from video_buffer import VideoBufferManager
+from clip_generator import ClipGenerator, ClipMetadata
+from timeline_index import TimelineIndex, TimelineEntry
+from reolink_search import search_recordings, get_channels_info, EVENT_TYPE_MAP
+
+# ─── Logging Setup ────────────────────────────────────────────────────────────
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+logger = logging.getLogger(__name__)
+
+# ─── Global State ─────────────────────────────────────────────────────────────
+config: AppConfig
+nvr_client: NVRClient
+event_stream: EventStream
+video_buffer: VideoBufferManager
+clip_generator: ClipGenerator
+timeline_index: TimelineIndex
+
+
+# ─── Pydantic Models ──────────────────────────────────────────────────────────
+
+class HealthCheck(BaseModel):
+    status: str
+    nvr_connected: bool
+    nvr_host: str
+    buffer_enabled: bool
+    timeline_entries: int
+
+
+class DeviceInfo(BaseModel):
+    model: str
+    firmware_version: str
+    nvr_name: str
+    mac_address: str
+    is_nvr: bool
+    num_channels: int
+    timezone: Optional[str] = None
+
+
+class ChannelInfo(BaseModel):
+    channel: int
+    name: str
+    enabled: bool
+    model: Optional[str] = None
+
+
+class Clip(BaseModel):
+    timestamp: str
+    end_timestamp: str
+    duration_seconds: int
+    event_type: str
+    trigger: str
+    file_name: str
+    stream_url: Optional[str] = None
+    download_url: Optional[str] = None
+
+
+class SearchResponse(BaseModel):
+    channel: int
+    start_date: str
+    end_date: str
+    event_type: Optional[str]
+    clips: List[Clip]
+    total_clips: int
+
+
+class TimelineEntryResponse(BaseModel):
+    entry_id: str
+    timestamp: str
+    channel: int
+    event_type: str
+    clip_path: Optional[str] = None
+    thumbnail_path: Optional[str] = None
+
+
+class TimelineResponse(BaseModel):
+    entries: List[TimelineEntryResponse]
+    total: int
+
+
+class StatsResponse(BaseModel):
+    nvr: dict
+    buffer: dict
+    timeline: dict
+    storage: dict
+
+
+class SystemStats(BaseModel):
+    status: str
+    nvr_connected: bool
+    event_subscribers: int
+    buffer_stats: dict
+    timeline_stats: dict
+    storage_usage: dict
+
+
+# ─── Lifespan (startup / shutdown) ───────────────────────────────────────────
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global config, nvr_client, event_stream, video_buffer, clip_generator, timeline_index
+
+    logger.info("Starting Reolink Enhanced API...")
+
+    # Load configuration
+    config = get_config()
+    logger.info("Configuration loaded")
+
+    # Initialize NVR client
+    nvr_client = NVRClient(
+        host=config.nvr.host,
+        port=config.nvr.port,
+        username=config.nvr.username,
+        password=config.nvr.password,
+        use_https=config.nvr.use_https,
+    )
+
+    # Connect to NVR
+    connected = await nvr_client.connect()
+    if not connected:
+        logger.error("Failed to connect to NVR on startup")
+    else:
+        logger.info("Connected to NVR")
+
+    # Initialize video buffer
+    video_buffer = VideoBufferManager(
+        nvr_client=nvr_client,
+        buffer_size_seconds=config.video_buffer.buffer_size_seconds,
+    )
+    if config.video_buffer.enabled:
+        try:
+            await video_buffer.start()
+            logger.info("Video buffer started")
+        except Exception as e:
+            logger.error("Failed to start video buffer: %s", e)
+
+    # Initialize clip generator
+    clip_generator = ClipGenerator(
+        video_buffer_manager=video_buffer,
+        clip_storage_dir=config.storage.clips_directory,
+        clip_duration_before=config.video_buffer.clip_duration_before,
+        clip_duration_after=config.video_buffer.clip_duration_after,
+    )
+    logger.info("Clip generator initialized")
+
+    # Initialize timeline index
+    timeline_index = TimelineIndex(config.storage.index_file)
+    logger.info("Timeline index initialized with %d entries", len(timeline_index.entries))
+
+    # Initialize event stream
+    event_stream = EventStream(nvr_client)
+    await event_stream.start()
+    logger.info("Event stream started")
+
+    yield  # ← app runs here
+
+    logger.info("Shutting down Reolink Enhanced API...")
+
+    # Stop event stream
+    await event_stream.stop()
+
+    # Stop video buffer
+    await video_buffer.stop()
+
+    # Disconnect NVR
+    await nvr_client.disconnect()
+
+    logger.info("Shutdown complete")
+
+
+# ─── App Initialization ──────────────────────────────────────────────────────
+
+app = FastAPI(
+    title="Reolink Enhanced API",
+    description="REST + WebSocket API for Reolink NVR Home Assistant Integration",
+    version="0.2.0",
+    lifespan=lifespan,
+)
+
+# Add CORS middleware if enabled
+if True:  # Can be controlled by config
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+
+# ─── Root Endpoints ──────────────────────────────────────────────────────────
+
+@app.get("/", summary="API root")
+async def root():
+    return {
+        "name": "Reolink Enhanced API",
+        "version": "0.2.0",
+        "status": "running",
+        "docs": "/docs",
+        "health": "/api/health",
+    }
+
+
+@app.get("/api/health", response_model=HealthCheck, summary="Health check")
+async def health_check():
+    return HealthCheck(
+        status="ok" if nvr_client.is_connected else "error",
+        nvr_connected=nvr_client.is_connected,
+        nvr_host=config.nvr.host,
+        buffer_enabled=config.video_buffer.enabled,
+        timeline_entries=len(timeline_index.entries),
+    )
+
+
+# ─── Device Endpoints ────────────────────────────────────────────────────────
+
+@app.get("/api/device/info", response_model=DeviceInfo, summary="Get NVR device information")
+async def get_device_info():
+    if not nvr_client.is_connected:
+        raise HTTPException(status_code=503, detail="NVR not connected")
+    try:
+        info = await nvr_client.get_device_info()
+        return DeviceInfo(**info)
+    except Exception as e:
+        logger.error("Error getting device info: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/channels", response_model=List[ChannelInfo], summary="List all camera channels")
+async def get_channels():
+    if not nvr_client.is_connected:
+        raise HTTPException(status_code=503, detail="NVR not connected")
+    try:
+        channels = await nvr_client.get_channels()
+        return [ChannelInfo(**ch) for ch in channels]
+    except Exception as e:
+        logger.error("Error getting channels: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─── Search Endpoints ───────────────────────────────────────────────────────
+
+@app.get("/api/search", response_model=SearchResponse, summary="Search recordings by date and event type")
+async def search(
+    channel: int = Query(..., description="Camera channel number (0-based)"),
+    start_date: str = Query(..., description="Start date YYYY-MM-DD"),
+    end_date: Optional[str] = Query(None, description="End date YYYY-MM-DD (defaults to start_date)"),
+    event_type: Optional[str] = Query(
+        None,
+        description=f"Filter by event type: {', '.join(EVENT_TYPE_MAP.keys())}",
+    ),
+    stream: str = Query("sub", description="Stream quality: 'sub' (default) or 'main'"),
+):
+    """Search NVR recordings by date range and optional event type."""
+    if not nvr_client.is_connected:
+        raise HTTPException(status_code=503, detail="NVR not connected")
+
+    # Validate channel
+    try:
+        channels = await nvr_client.get_channels()
+        if channel < 0 or channel >= len(channels):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Channel {channel} out of range",
+            )
+    except Exception as e:
+        logger.error("Error validating channel: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+    # Validate dates
+    try:
+        start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+        end_dt = datetime.strptime(end_date or start_date, "%Y-%m-%d")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid date format: {e}")
+
+    if start_dt > end_dt:
+        raise HTTPException(status_code=400, detail="start_date must be ≤ end_date")
+
+    # Validate event type
+    if event_type:
+        event_type_upper = event_type.upper()
+        if event_type_upper not in EVENT_TYPE_MAP:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid event_type. Must be one of: {', '.join(EVENT_TYPE_MAP.keys())}",
+            )
+        event_type = event_type_upper
+
+    # Validate stream
+    if stream not in ("sub", "main"):
+        raise HTTPException(status_code=400, detail="stream must be 'sub' or 'main'")
+
+    logger.info(
+        "Search: channel=%s, start=%s, end=%s, event_type=%s, stream=%s",
+        channel, start_date, end_date or start_date, event_type, stream,
+    )
+
+    try:
+        raw_clips = await search_recordings(
+            host=nvr_client.api_host,
+            channel=channel,
+            start_dt=start_dt,
+            end_dt=end_dt,
+            event_type=event_type,
+            stream=stream,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.exception("Error during search")
+        raise HTTPException(status_code=500, detail=str(e))
+
+    clips = [Clip(**c) for c in raw_clips]
+
+    return SearchResponse(
+        channel=channel,
+        start_date=start_date,
+        end_date=end_date or start_date,
+        event_type=event_type,
+        clips=clips,
+        total_clips=len(clips),
+    )
+
+
+# ─── Timeline Endpoints ──────────────────────────────────────────────────────
+
+@app.get("/api/timeline", response_model=TimelineResponse, summary="Get event timeline")
+async def get_timeline(
+    channel: Optional[int] = Query(None, description="Filter by channel"),
+    event_type: Optional[str] = Query(None, description="Filter by event type"),
+    hours: int = Query(24, description="Look back this many hours"),
+    limit: int = Query(100, description="Maximum entries to return"),
+):
+    """Get timeline of events and clips."""
+    try:
+        from datetime import timedelta
+        since = datetime.now() - timedelta(hours=hours)
+
+        entries = timeline_index.get_entries(
+            channel=channel,
+            event_type=event_type,
+            since=since,
+            limit=limit,
+        )
+
+        return TimelineResponse(
+            entries=[
+                TimelineEntryResponse(
+                    entry_id=e.entry_id,
+                    timestamp=e.timestamp.isoformat(),
+                    channel=e.channel,
+                    event_type=e.event_type,
+                    clip_path=e.clip_path,
+                    thumbnail_path=e.thumbnail_path,
+                )
+                for e in entries
+            ],
+            total=len(entries),
+        )
+    except Exception as e:
+        logger.error("Error getting timeline: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/timeline/{entry_id}", summary="Get timeline entry details")
+async def get_timeline_entry(entry_id: str):
+    """Get details for a specific timeline entry."""
+    # Find entry in index
+    for entry in timeline_index.entries:
+        if entry.entry_id == entry_id:
+            return entry.to_dict()
+
+    raise HTTPException(status_code=404, detail="Entry not found")
+
+
+# ─── Clip Endpoints ────────────────────────────────────────────────────────
+
+@app.get("/api/clips/{clip_id}", summary="Download clip file")
+async def download_clip(clip_id: str):
+    """Download a generated clip."""
+    # In production, would look up clip_id and serve file
+    raise HTTPException(status_code=501, detail="Clip download not yet implemented")
+
+
+# ─── Stats Endpoints ───────────────────────────────────────────────────────
+
+@app.get("/api/stats", response_model=SystemStats, summary="Get system statistics")
+async def get_stats():
+    """Get system health and statistics."""
+    try:
+        storage_usage = await clip_generator.get_storage_usage()
+        return SystemStats(
+            status="ok" if nvr_client.is_connected else "error",
+            nvr_connected=nvr_client.is_connected,
+            event_subscribers=len(event_stream._subscribers),
+            buffer_stats=video_buffer.get_stats(),
+            timeline_stats=timeline_index.get_stats(),
+            storage_usage=storage_usage,
+        )
+    except Exception as e:
+        logger.error("Error getting stats: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─── WebSocket Endpoint ────────────────────────────────────────────────────
+
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: List[WebSocket] = []
+
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+        logger.info("WebSocket connected. Total: %d", len(self.active_connections))
+
+    def disconnect(self, websocket: WebSocket):
+        self.active_connections.remove(websocket)
+        logger.info("WebSocket disconnected. Total: %d", len(self.active_connections))
+
+    async def broadcast(self, data: dict):
+        for connection in self.active_connections:
+            try:
+                await connection.send_json(data)
+            except Exception as e:
+                logger.error("Error sending WebSocket message: %s", e)
+
+
+manager = ConnectionManager()
+
+
+@app.websocket("/ws/events")
+async def websocket_endpoint(websocket: WebSocket):
+    """
+    WebSocket endpoint for real-time event streaming.
+    Clients connect here to receive events as they occur.
+    """
+    await manager.connect(websocket)
+
+    async def event_callback(event: Event):
+        await manager.broadcast({
+            "type": "event",
+            "timestamp": event.timestamp.isoformat(),
+            "channel": event.channel,
+            "event_type": event.event_type.value,
+            "event_id": event.event_id,
+            "metadata": event.metadata,
+        })
+
+    # Subscribe to events
+    unsubscribe = event_stream.subscribe(event_callback)
+
+    try:
+        while True:
+            # Keep connection alive, receive any client messages
+            data = await websocket.receive_text()
+            # Echo back
+            await websocket.send_text(f"Received: {data}")
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
+        unsubscribe()
+        logger.info("WebSocket closed")
+    except Exception as e:
+        logger.error("WebSocket error: %s", e)
+        manager.disconnect(websocket)
+        unsubscribe()
+
+
+# ─── Debug Endpoint ────────────────────────────────────────────────────────
+
+@app.get("/api/debug/info", summary="Debug information (debug mode only)")
+async def debug_info():
+    """Debug endpoint with detailed system information."""
+    if not config.api.debug:
+        raise HTTPException(status_code=403, detail="Debug endpoint disabled")
+
+    return {
+        "config": {
+            "nvr_host": config.nvr.host,
+            "nvr_port": config.nvr.port,
+            "nvr_ssl": config.nvr.use_https,
+            "buffer_enabled": config.video_buffer.enabled,
+            "retention_days": config.storage.retention_days,
+        },
+        "state": {
+            "nvr_connected": nvr_client.is_connected,
+            "buffer_running": video_buffer._running if video_buffer else False,
+            "event_stream_running": event_stream._running if event_stream else False,
+        },
+        "event_stream": event_stream.get_stats() if event_stream else None,
+        "timeline": timeline_index.get_stats() if timeline_index else None,
+    }
+
+
+# ─── Main ─────────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    # Load config for debug purposes
+    cfg = get_config()
+
+    uvicorn.run(
+        app,
+        host=cfg.api.host,
+        port=cfg.api.port,
+        log_level="debug" if cfg.api.debug else "info",
+    )
