@@ -13,7 +13,7 @@ RUN apk add --no-cache \
     tzdata
 
 # Install Python dependencies.
-# The build context is ./reolink-nvr-ha-app, so app/ and addon/ are both reachable.
+# The build context is the repository root, so app/ and this package folder are both reachable.
 WORKDIR /app
 
 COPY app/requirements.txt requirements.txt
@@ -22,8 +22,8 @@ RUN pip3 install --no-cache-dir -r requirements.txt
 # Copy application source
 COPY app/ .
 
-# Copy and prepare the add-on entry point
-COPY addon/run.sh /run.sh
+# Copy and prepare the app entry point
+COPY reolink_enhanced_api/run.sh /run.sh
 RUN chmod a+x /run.sh
 
 CMD [ "/run.sh" ]

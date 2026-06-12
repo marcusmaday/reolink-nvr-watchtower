@@ -1,20 +1,20 @@
 # Reolink Enhanced API
 
-Reolink Enhanced API is a Home Assistant add-on and REST service for browsing Reolink NVR recordings, pulling event clips, and exposing a searchable timeline.
+Reolink Enhanced API is a Home Assistant app and REST service for browsing Reolink NVR recordings, pulling event clips, and exposing a searchable timeline.
 
 ## What It Gives You
 
 - Search recordings by date, channel, and event type
 - View a timeline of recent person, motion, vehicle, animal, and doorbell events
 - Generate clip URLs for playback or download
-- Run as a Home Assistant add-on or as a local Docker service
+- Run as a Home Assistant app or as a local Docker service
 
 ## Repository Layout
 
 ```text
 .
 ├── app/            FastAPI app and NVR integration code
-├── addon/          Home Assistant add-on metadata and startup script
+├── reolink_enhanced_api/ Home Assistant app metadata and startup script
 ├── integration/    Optional Home Assistant custom integration
 ├── Dockerfile      Local development image
 ├── docker-compose.yml
@@ -26,7 +26,7 @@ Reolink Enhanced API is a Home Assistant add-on and REST service for browsing Re
 
 ## Start Here
 
-1. Configure your NVR connection in the Home Assistant add-on or in `.env` for local Docker.
+1. Configure your NVR connection in the Home Assistant app or in `.env` for local Docker.
 2. Start the service.
 3. Open the API at `http://localhost:5000/docs`.
 4. Try a search.
@@ -80,7 +80,7 @@ Common settings:
 - `MAX_STORAGE_MB`
 - `DEBUG`
 
-For Home Assistant add-on installs, these are supplied through the add-on options UI.
+For Home Assistant app installs, these are supplied through the app options UI.
 
 ## Troubleshooting
 
@@ -92,6 +92,5 @@ For Home Assistant add-on installs, these are supplied through the add-on option
 ## More Details
 
 - [QUICKSTART.md](QUICKSTART.md) for a fast install path
-- [INSTALL.md](INSTALL.md) for add-on and Docker setup
+- [INSTALL.md](INSTALL.md) for app and Docker setup
 - [API.md](API.md) for endpoint details
-

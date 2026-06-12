@@ -41,7 +41,7 @@ jobs:
       - name: Extract version from manifest
         id: version
         run: |
-          VERSION=$(grep '^version:' addon/config.yaml | head -1 | sed 's/version:[[:space:]]*//; s/"//g')
+          VERSION=$(grep '^version:' reolink_enhanced_api/config.yaml | head -1 | sed 's/version:[[:space:]]*//; s/"//g')
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
           echo "Building version: ${VERSION} for ${{ matrix.arch }}"
 
@@ -62,9 +62,9 @@ jobs:
       - name: Build and push (${{ matrix.arch }})
         uses: docker/build-push-action@v6
         with:
-          # Context is the repository root so both app/ and addon/ are reachable.
+          # Context is the repository root so both app/ and the app package are reachable.
           context: .
-          file: ./addon/Dockerfile
+          file: ./reolink_enhanced_api/Dockerfile
           platforms: ${{ matrix.platform }}
           # This is the fix: inject the correct HA base image per architecture
           build-args: BUILD_FROM=${{ matrix.build_from }}
