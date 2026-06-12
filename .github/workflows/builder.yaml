@@ -31,9 +31,8 @@ jobs:
           - arch: aarch64
             platform: linux/arm64
             build_from: ghcr.io/home-assistant/aarch64-base-python:3.12-alpine3.21
-          - arch: armv7
-            platform: linux/arm/v7
-            build_from: ghcr.io/home-assistant/armv7-base-python:3.12-alpine3.21
+          # armv7 removed — no pre-built wheels for several dependencies,
+          # and HA Green (the target hardware) is aarch64
 
     steps:
       - name: Checkout code
