@@ -9,7 +9,9 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 # ffmpeg is required by clip_generator.py for RTSP buffering and clip extraction.
 # tzdata is needed so the container respects the HA timezone setting.
 RUN apk add --no-cache \
+    bash \
     ffmpeg \
+    jq \
     tzdata
 
 # Install Python dependencies.
@@ -26,4 +28,5 @@ COPY app/ .
 COPY reolink_enhanced_api/run.sh /run.sh
 RUN chmod a+x /run.sh
 
+ENTRYPOINT []
 CMD [ "/run.sh" ]
