@@ -1,23 +1,46 @@
 #!/bin/bash
-# Home Assistant add-on run script
+set -e
 
-# Read add-on options
-export NVR_HOST=$(jq --raw-output '.nvr_host // "192.168.1.100"' /data/options.json)
-export NVR_PORT=$(jq --raw-output '.nvr_port // 80' /data/options.json)
-export NVR_USERNAME=$(jq --raw-output '.nvr_username // "admin"' /data/options.json)
-export NVR_PASSWORD=$(jq --raw-output '.nvr_password // "password"' /data/options.json)
-export NVR_SSL=$(jq --raw-output '.nvr_ssl // false' /data/options.json)
-export DEBUG=$(jq --raw-output '.debug // false' /data/options.json)
-export API_PORT=$(jq --raw-output '.api_port // 5000' /data/options.json)
+# Reolink Enhanced API Add-on Entry Point
+# This script runs inside the Home Assistant add-on container
 
-# Log configuration
-echo "Starting Reolink NVR HA App"
-echo "NVR Host: $NVR_HOST"
-echo "NVR Port: $NVR_PORT"
-echo "NVR SSL: $NVR_SSL"
-echo "API Port: $API_PORT"
-echo "Debug: $DEBUG"
+echo "Starting Reolink Enhanced API Add-on..."
 
-# Start the FastAPI application
+# Read add-on options from Home Assistant config
+CONFIG_PATH=/data/options.json
+
+if [ -f "$CONFIG_PATH" ]; then
+    echo "Loading configuration from $CONFIG_PATH"
+    
+    export NVR_HOST=$(jq -r '.nvr_host' "$CONFIG_PATH")
+    export NVR_PORT=$(jq -r '.nvr_port' "$CONFIG_PATH")
+    export NVR_USERNAME=$(jq -r '.nvr_username' "$CONFIG_PATH")
+    export NVR_PASSWORD=$(jq -r '.nvr_password' "$CONFIG_PATH")
+    export NVR_SSL=$(jq -r '.nvr_ssl' "$CONFIG_PATH")
+    export BUFFER_ENABLED=$(jq -r '.buffer_enabled' "$CONFIG_PATH")
+    export BUFFER_SIZE_SECONDS=$(jq -r '.buffer_size_seconds' "$CONFIG_PATH")
+    export CLIP_DURATION_BEFORE=$(jq -r '.clip_duration_before' "$CONFIG_PATH")
+    export CLIP_DURATION_AFTER=$(jq -r '.clip_duration_after' "$CONFIG_PATH")
+    export RETENTION_DAYS=$(jq -r '.retention_days' "$CONFIG_PATH")
+    export MAX_STORAGE_MB=$(jq -r '.max_storage_mb' "$CONFIG_PATH")
+    export DEBUG=$(jq -r '.debug' "$CONFIG_PATH")
+    
+    echo "Configuration:"
+    echo "  NVR Host: $NVR_HOST:$NVR_PORT"
+    echo "  Username: $NVR_USERNAME"
+    echo "  SSL: $NVR_SSL"
+    echo "  Buffer Enabled: $BUFFER_ENABLED"
+    echo "  Retention: $RETENTION_DAYS days"
+    echo "  Debug: $DEBUG"
+else
+    echo "No options.json found, using defaults"
+fi
+
+# Set data directory for clips and index
+export HOME_ASSISTANT_DATA_DIR=/data/reolink
+
+mkdir -p /data/reolink
 cd /app
-python3 -m uvicorn main:app --host 0.0.0.0 --port $API_PORT
+
+# Run the FastAPI app
+exec python -m uvicorn main:app --host 0.0.0.0 --port 5000

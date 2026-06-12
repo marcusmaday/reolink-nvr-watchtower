@@ -15,7 +15,7 @@ WORKDIR /app
 COPY app/ /app/
 
 # Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --break-system-packages -r requirements.txt
 
 # Copy add-on startup script
 COPY addon/run.sh /

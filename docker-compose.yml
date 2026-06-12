@@ -3,8 +3,8 @@ version: '3.8'
 services:
   reolink-enhanced-api:
     build:
-      context: .
-      dockerfile: addon/Dockerfile
+      context: ./reolink-nvr-ha-app
+      dockerfile: Dockerfile
     container_name: reolink-enhanced-api
     ports:
       - "5000:5000"

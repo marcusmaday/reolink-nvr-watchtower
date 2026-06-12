@@ -1,51 +1,51 @@
-{
-  "name": "Reolink NVR HA App",
-  "version": "0.1.0",
-  "slug": "reolink-nvr-ha-app",
-  "description": "REST API wrapper for Reolink NVR with advanced recording search and filtering",
-  "url": "https://github.com/marcusmaday/reolink-nvr-ha-app",
-  "codeowners": ["@marcusmaday"],
-  "startup": "application",
-  "boot": "auto",
-  "arch": ["aarch64", "amd64", "armv7", "armhf", "i386"],
-  "options": {
-    "nvr_host": "192.168.1.100",
-    "nvr_port": 80,
-    "nvr_username": "admin",
-    "nvr_password": "password",
-    "nvr_ssl": false,
-    "debug": false,
-    "api_port": 5000
-  },
-  "schema": {
-    "nvr_host": "str",
-    "nvr_port": "port",
-    "nvr_username": "str",
-    "nvr_password": "password",
-    "nvr_ssl": "bool",
-    "debug": "bool",
-    "api_port": "port(5000,65535)"
-  },
-  "ports": {
-    "5000/tcp": {
-      "description": "Reolink NVR HA App API",
-      "host_port": 5000
-    }
-  },
-  "ports_description": {
-    "5000/tcp": "API port (http://localhost:5000)"
-  },
-  "homeassistant_api": true,
-  "privileged": [],
-  "docker_api": false,
-  "full_access": false,
-  "services": [],
-  "environment": {},
-  "health_check": {
-    "test": "curl --fail http://localhost:5000/api/health || exit 1",
-    "interval": 30,
-    "retries": 3,
-    "start_period": 30,
-    "timeout": 5
-  }
-}
+name: "Reolink Enhanced API"
+version: "0.2.0"
+slug: "reolink_enhanced_api"
+description: "REST + WebSocket API wrapper for Reolink NVR with event timeline and clip generation"
+arch:
+  - aarch64
+  - amd64
+  - armv7
+startup: "services"
+boot: "auto"
+host_network: true
+services:
+  - "http:needed"
+ports:
+  5000/tcp: 5000
+ports_description:
+  5000/tcp: "API server port"
+image: "ghcr.io/marcusmaday/reolink-nvr-ha-app:{arch}"
+options:
+  nvr_host: "192.168.1.100"
+  nvr_port: 80
+  nvr_username: "admin"
+  nvr_password: "password"
+  nvr_ssl: false
+  buffer_enabled: true
+  buffer_size_seconds: 60
+  clip_duration_before: 5
+  clip_duration_after: 5
+  retention_days: 7
+  max_storage_mb: 5000
+  debug: false
+schema:
+  nvr_host: "str"
+  nvr_port: "int(1,65535)"
+  nvr_username: "str"
+  nvr_password: "password"
+  nvr_ssl: "bool"
+  buffer_enabled: "bool"
+  buffer_size_seconds: "int(10,300)"
+  clip_duration_before: "int(1,30)"
+  clip_duration_after: "int(1,30)"
+  retention_days: "int(1,90)"
+  max_storage_mb: "int(100,20000)"
+  debug: "bool"
+requirements:
+  - "ghcr.io/hassio-addons/base:latest"
+homeassistant: "2024.1.0"
+documentation: "https://github.com/marcusmaday/reolink-nvr-ha-app"
+support: "https://github.com/marcusmaday/reolink-nvr-ha-app/issues"
+repository: "https://github.com/marcusmaday/reolink-nvr-ha-app"
+issues: "https://github.com/your-org/reolink-enhanced-api/issues"

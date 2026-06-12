@@ -1,32 +1,35 @@
-ARG BUILD_FROM=ghcr.io/home-assistant/aarch64-base:latest
-FROM ${BUILD_FROM}
+ARG BUILD_FROM=ghcr.io/hassio-addons/base:latest
+FROM $BUILD_FROM
 
-# Install Python and dependencies
+# Install additional dependencies
 RUN apk add --no-cache \
     python3 \
     py3-pip \
-    py3-uvicorn \
-    curl
+    jq \
+    ffmpeg
 
 # Set working directory
 WORKDIR /app
 
-# Copy requirements
-COPY app/requirements.txt .
+# Copy application files
+COPY app/ /app/
 
-# Install Python packages
-RUN pip3 install --no-cache-dir -r requirements.txt
+# Install Python dependencies
+RUN pip install --no-cache-dir --break-system-packages -r requirements.txt
 
-# Copy application code
-COPY app/ .
+# Copy add-on startup script
+COPY run.sh /
+RUN chmod +x /run.sh
 
-# Create non-root user
-RUN addgroup -S appuser && adduser -S appuser -G appuser
-USER appuser
+# Create data directory
+RUN mkdir -p /data/reolink
+
+# Expose API port
+EXPOSE 5000
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
-    CMD curl -f http://localhost:5000/api/health || exit 1
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD python3 -c "import requests; requests.get('http://localhost:5000/api/health', timeout=5)" || exit 1
 
-# Start application
-CMD ["python3", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "5000"]
+# Start the application
+CMD ["/run.sh"]

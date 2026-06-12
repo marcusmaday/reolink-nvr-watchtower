@@ -10,6 +10,7 @@ Features:
   - Storage management
 """
 
+import os
 import logging
 import asyncio
 from datetime import datetime
@@ -21,6 +22,9 @@ from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
+
+from reolink_aio.api import Host
+from reolink_aio.exceptions import ReolinkError
 
 # Import our custom modules
 from config import get_config, AppConfig
