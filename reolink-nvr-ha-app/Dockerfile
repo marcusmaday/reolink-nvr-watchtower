@@ -1,12 +1,12 @@
-ARG BUILD_FROM=ghcr.io/hassio-addons/base:latest
+ARG BUILD_FROM=python:3.11-alpine
 FROM $BUILD_FROM
 
-# Install additional dependencies
+# Install system dependencies
 RUN apk add --no-cache \
-    python3 \
-    py3-pip \
+    bash \
     jq \
-    ffmpeg
+    ffmpeg \
+    curl
 
 # Set working directory
 WORKDIR /app
@@ -15,7 +15,8 @@ WORKDIR /app
 COPY app/ /app/
 
 # Install Python dependencies
-RUN pip install --no-cache-dir --break-system-packages -r requirements.txt
+RUN pip install --no-cache-dir --break-system-packages -r requirements.txt || \
+    pip install --no-cache-dir -r requirements.txt
 
 # Copy add-on startup script
 COPY run.sh /
@@ -28,8 +29,8 @@ RUN mkdir -p /data/reolink
 EXPOSE 5000
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python3 -c "import requests; requests.get('http://localhost:5000/api/health', timeout=5)" || exit 1
+HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
+    CMD curl -f http://localhost:5000/api/health || exit 1
 
 # Start the application
 CMD ["/run.sh"]
