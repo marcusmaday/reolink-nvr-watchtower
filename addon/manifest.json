@@ -3,18 +3,17 @@
   "version": "0.2.0",
   "slug": "reolink_enhanced_api",
   "description": "REST + WebSocket API wrapper for Reolink NVR with event timeline and clip generation",
-  "arch": ["aarch64", "amd64", "armv7"],
+  "arch": ["aarch64", "amd64"],
   "startup": "services",
   "boot": "auto",
   "host_network": true,
-  "services": ["http:needed"],
   "ports": {
     "5000/tcp": 5000
   },
   "ports_description": {
     "5000/tcp": "API server port"
   },
-  "image": "ghcr.io/marcusmaday/reolink-nvr-ha-app",
+  "image": "ghcr.io/marcusmaday/reolink-nvr-enhanced-{arch}",
   "options": {
     "nvr_host": "192.168.1.100",
     "nvr_port": 80,
@@ -45,7 +44,5 @@
   },
   "homeassistant": "2024.1.0",
   "documentation": "https://github.com/marcusmaday/reolink-nvr-ha-app",
-  "support": "https://github.com/marcusmaday/reolink-nvr-ha-app/issues",
-  "repository": "https://github.com/marcusmaday/reolink-nvr-ha-app",
-  "issues": "https://github.com/marcusmaday/reolink-nvr-ha-app/issues"
+  "support": "https://github.com/marcusmaday/reolink-nvr-ha-app/issues"
 }

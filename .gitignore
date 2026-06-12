@@ -10,6 +10,7 @@ job_logs.txt
 
 # Python
 __pycache__/
+reolink-nvr-ha-app/
 *.py[cod]
 *$py.class
 *.so
@@ -72,3 +73,5 @@ Thumbs.db
 
 # Logs
 *.log
+
+.env

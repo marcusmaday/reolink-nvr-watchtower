@@ -41,7 +41,7 @@ jobs:
       - name: Extract version from manifest
         id: version
         run: |
-          VERSION=$(grep '"version"' reolink-nvr-ha-app/addon/manifest.json | head -1 | sed 's/.*: "//' | sed 's/".*//')
+          VERSION=$(grep '"version"' addon/manifest.json | head -1 | sed 's/.*: "//' | sed 's/".*//')
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
           echo "Building version: ${VERSION} for ${{ matrix.arch }}"
 
@@ -62,10 +62,9 @@ jobs:
       - name: Build and push (${{ matrix.arch }})
         uses: docker/build-push-action@v6
         with:
-          # Context is the reolink-nvr-ha-app/ subdirectory so both
-          # app/ and addon/ are reachable inside the Dockerfile.
-          context: ./reolink-nvr-ha-app
-          file: ./reolink-nvr-ha-app/addon/Dockerfile
+          # Context is the repository root so both app/ and addon/ are reachable.
+          context: .
+          file: ./addon/Dockerfile
           platforms: ${{ matrix.platform }}
           # This is the fix: inject the correct HA base image per architecture
           build-args: BUILD_FROM=${{ matrix.build_from }}

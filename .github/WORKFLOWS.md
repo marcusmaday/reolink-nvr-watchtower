@@ -10,7 +10,6 @@ This repository includes an automated GitHub Actions workflow that builds and pu
 2. **Builds Docker images** for multiple architectures:
    - `linux/amd64` (x86-64)
    - `linux/arm64` (ARM 64-bit - for Apple Silicon, Raspberry Pi 4+)
-   - `linux/arm/v7` (ARM 32-bit - for older Raspberry Pi models)
 3. **Pushes images** to GitHub Container Registry (ghcr.io)
 4. **Tags images** with:
    - `latest` (always points to main branch)
@@ -31,8 +30,8 @@ The workflow automatically uses your GitHub token (`GITHUB_TOKEN`), so no additi
 
 After the workflow completes, Docker images are available at:
 ```
-ghcr.io/marcusmaday/reolink-nvr-ha-app:latest
-ghcr.io/marcusmaday/reolink-nvr-ha-app:0.2.0  # version from manifest
+ghcr.io/marcusmaday/reolink-nvr-enhanced-amd64:latest
+ghcr.io/marcusmaday/reolink-nvr-enhanced-amd64:0.2.0  # example versioned tag
 ```
 
 ### Making images public:
@@ -41,14 +40,14 @@ By default, images may be private. To make them public:
 
 1. Go to your GitHub repository
 2. Click **Packages** (right sidebar)
-3. Find `reolink-nvr-ha-app`
+3. Find `reolink-nvr-enhanced-amd64`
 4. Click the package name
 5. Click **Package settings**
 6. Scroll down and change visibility to **Public**
 
 Or set it when pushing:
 ```bash
-docker push ghcr.io/marcusmaday/reolink-nvr-ha-app:latest
+docker push ghcr.io/marcusmaday/reolink-nvr-enhanced-amd64:latest
 ```
 
 ## Testing the workflow:

@@ -3,10 +3,10 @@
   "name": "Reolink Enhanced",
   "codeowners": ["@your-github-username"],
   "config_flow": true,
-  "documentation": "https://github.com/your-org/reolink-enhanced-integration/wiki",
+  "documentation": "https://github.com/marcusmaday/reolink-nvr-ha-app",
   "requirements": ["aiohttp==3.10.10"],
   "version": "0.2.0",
   "homeassistant": "2024.1.0",
-  "issue_tracker": "https://github.com/your-org/reolink-enhanced-integration/issues",
+  "issue_tracker": "https://github.com/marcusmaday/reolink-nvr-ha-app/issues",
   "iot_class": "local_polling"
 }

@@ -53,6 +53,7 @@ logger = logging.getLogger(__name__)
 
 # Global NVR host instance
 nvr_host: Optional[Host] = None
+timeline_index: Optional[TimelineIndex] = None
 
 
 # ─── Pydantic models ──────────────────────────────────────────────────────────
@@ -103,7 +104,7 @@ class HealthCheck(BaseModel):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global nvr_host
+    global nvr_host, timeline_index   # ← also add timeline_index here
 
     logger.info("Starting Reolink NVR HA App...")
     logger.info("Connecting to NVR at %s:%s", NVR_HOST, NVR_PORT)
@@ -117,13 +118,17 @@ async def lifespan(app: FastAPI):
             use_https=NVR_SSL,
         )
         await nvr_host.get_host_data()
-        logger.info("Connected to NVR: %s (%s channels)", nvr_host.nvr_name, nvr_host.num_channel)
+        logger.info("Connected to NVR: %s (%s channels)", nvr_host.nvr_name, nvr_host.num_channels)
     except ReolinkError as e:
         logger.error("Failed to connect to NVR: %s", e)
         nvr_host = None
     except Exception as e:
         logger.error("Unexpected error during startup: %s", e)
         nvr_host = None
+
+    index_path = os.getenv("HOME_ASSISTANT_DATA_DIR", "/data/reolink")
+    timeline_index = TimelineIndex(index_file=f"{index_path}/timeline.json")
+    logger.info("Timeline index initialized at %s/timeline.json", index_path)
 
     yield  # ← app runs here
 
@@ -133,7 +138,6 @@ async def lifespan(app: FastAPI):
             await nvr_host.logout()
         except Exception as e:
             logger.error("Error during logout: %s", e)
-
 
 # ─── App init ─────────────────────────────────────────────────────────────────
 
@@ -184,7 +188,7 @@ async def get_device_info():
             nvr_name=nvr_host.nvr_name or "Unknown",
             mac_address=nvr_host.mac_address or "Unknown",
             is_nvr=nvr_host.is_nvr,
-            num_channels=nvr_host.num_channel,
+            num_channels=nvr_host.num_channels,
         )
     except Exception as e:
         logger.error("Error getting device info: %s", e)
@@ -229,10 +233,10 @@ async def search(
     _require_nvr()
 
     # Validate channel
-    if channel < 0 or channel >= nvr_host.num_channel:
+    if channel < 0 or channel >= nvr_host.num_channels:
         raise HTTPException(
             status_code=400,
-            detail=f"Channel {channel} out of range. NVR has {nvr_host.num_channel} channels (0-based).",
+            detail=f"Channel {channel} out of range. NVR has {nvr_host.num_channels} channels (0-based).",
         )
 
     # Validate dates
@@ -284,6 +288,30 @@ async def search(
 
     clips = [Clip(**c) for c in raw_clips]
 
+    for clip in clips:
+        if clip.event_type not in EVENT_TYPE_MAP:
+            continue
+
+        entry_id = f"{channel}_{clip.timestamp}_{clip.event_type}"
+        if not any(entry.entry_id == entry_id for entry in timeline_index.entries):
+            timeline_index.add_entry(
+                TimelineEntry(
+                    entry_id=entry_id,
+                    timestamp=datetime.fromisoformat(clip.timestamp),
+                    channel=channel,
+                    event_type=clip.event_type,
+                    clip_path=clip.download_url or clip.stream_url,
+                    metadata={
+                        "end_timestamp": clip.end_timestamp,
+                        "duration_seconds": clip.duration_seconds,
+                        "trigger": clip.trigger,
+                        "file_name": clip.file_name,
+                        "stream_url": clip.stream_url,
+                        "download_url": clip.download_url,
+                    },
+                )
+            )
+
     return SearchResponse(
         channel=channel,
         start_date=start_date,
@@ -292,6 +320,35 @@ async def search(
         clips=clips,
         total_clips=len(clips),
     )
+
+@app.get("/api/timeline", summary="Get event timeline")
+async def get_timeline(
+    hours: int = Query(24, description="How many hours back to query"),
+    channel: Optional[int] = Query(None, description="Filter by channel"),
+    event_type: Optional[str] = Query(None, description="Filter by event type"),
+    limit: int = Query(100, description="Maximum number of entries to return"),
+):
+    entries = timeline_index.get_entries(
+        channel=channel,
+        event_type=event_type,
+        since=datetime.now() - __import__('datetime').timedelta(hours=hours),
+        limit=limit,
+    )
+    return {
+        "hours": hours,
+        "channel": channel,
+        "event_type": event_type,
+        "total": len(entries),
+        "entries": [e.to_dict() for e in entries],
+    }
+
+
+@app.get("/api/timeline/{entry_id}", summary="Get a single timeline entry")
+async def get_timeline_entry(entry_id: str):
+    entries = [e for e in timeline_index.entries if e.entry_id == entry_id]
+    if not entries:
+        raise HTTPException(status_code=404, detail=f"Timeline entry '{entry_id}' not found")
+    return entries[0].to_dict()
 
 
 @app.get("/api/debug/info", summary="Debug info (requires debug=true in config)")
@@ -307,7 +364,7 @@ async def debug_info():
             "model":        nvr_host.model         if nvr_host else None,
             "sw_version":   nvr_host.sw_version    if nvr_host else None,
             "nvr_name":     nvr_host.nvr_name       if nvr_host else None,
-            "num_channels": nvr_host.num_channel    if nvr_host else None,
+            "num_channels": nvr_host.num_channels    if nvr_host else None,
             "is_nvr":       nvr_host.is_nvr         if nvr_host else None,
             "mac_address":  nvr_host.mac_address    if nvr_host else None,
         },

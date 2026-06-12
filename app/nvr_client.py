@@ -53,7 +53,7 @@ class NVRClient:
             logger.info(
                 "Connected to NVR: %s (%d channels)",
                 self._host.nvr_name,
-                self._host.num_channel,
+                self._host.num_channels,
             )
             return True
         except ReolinkError as e:
@@ -101,7 +101,7 @@ class NVRClient:
             "nvr_name": host.nvr_name or "Unknown",
             "mac_address": host.mac_address or "Unknown",
             "is_nvr": host.is_nvr,
-            "num_channels": host.num_channel,
+            "num_channels": host.num_channels,
             "timezone": getattr(host, "timezone", "Unknown"),
         }
 
@@ -112,7 +112,7 @@ class NVRClient:
 
         host = self._host
         channels = []
-        for i in range(host.num_channel):
+        for i in range(host.num_channels):
             channels.append({
                 "channel": i,
                 "name": host.camera_name(i) or f"Channel {i}",

@@ -56,7 +56,7 @@ async def test_event_type_mapping():
 async def test_invalid_event_type():
     """Test that invalid event types raise ValueError."""
     mock_host = AsyncMock()
-    mock_host.num_channel = 8
+    mock_host.num_channels = 8
     
     with pytest.raises(ValueError) as exc_info:
         await search_recordings(
@@ -74,7 +74,7 @@ async def test_invalid_event_type():
 async def test_search_empty_result():
     """Test search when no clips found."""
     mock_host = AsyncMock()
-    mock_host.num_channel = 8
+    mock_host.num_channels = 8
     mock_host.request_vod_files = AsyncMock()
     mock_host.vod_files = Mock(return_value=[])  # No clips
     

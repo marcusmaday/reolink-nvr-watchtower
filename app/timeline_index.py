@@ -7,7 +7,7 @@ Maintains searchable metadata about events and clips.
 
 import logging
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional, List
 from dataclasses import dataclass, asdict
@@ -102,6 +102,8 @@ class TimelineIndex:
         Query timeline entries with optional filters.
         """
         results = self.entries
+        since = self._normalize_dt(since)
+        until = self._normalize_dt(until)
 
         if channel is not None:
             results = [e for e in results if e.channel == channel]
@@ -110,13 +112,22 @@ class TimelineIndex:
             results = [e for e in results if e.event_type.lower() == event_type.lower()]
 
         if since is not None:
-            results = [e for e in results if e.timestamp >= since]
+            results = [
+                e for e in results
+                if (normalized := self._normalize_dt(e.timestamp)) is not None and normalized >= since
+            ]
 
         if until is not None:
-            results = [e for e in results if e.timestamp <= until]
+            results = [
+                e for e in results
+                if (normalized := self._normalize_dt(e.timestamp)) is not None and normalized <= until
+            ]
 
         # Sort by timestamp descending (newest first)
-        results.sort(key=lambda e: e.timestamp, reverse=True)
+        results.sort(
+            key=lambda e: self._normalize_dt(e.timestamp) or datetime.min,
+            reverse=True,
+        )
 
         return results[:limit]
 
@@ -147,9 +158,12 @@ class TimelineIndex:
         Delete entries older than max_age_days.
         Returns number of entries deleted.
         """
-        cutoff = datetime.now() - timedelta(days=max_age_days)
+        cutoff = self._normalize_dt(datetime.now() - timedelta(days=max_age_days))
         original_count = len(self.entries)
-        self.entries = [e for e in self.entries if e.timestamp > cutoff]
+        self.entries = [
+            e for e in self.entries
+            if (normalized := self._normalize_dt(e.timestamp)) is not None and normalized > cutoff
+        ]
 
         deleted_count = original_count - len(self.entries)
         if deleted_count > 0:
@@ -173,6 +187,14 @@ class TimelineIndex:
             "by_channel": by_channel,
             "index_file": str(self.index_file),
         }
+
+    @staticmethod
+    def _normalize_dt(value: Optional[datetime]) -> Optional[datetime]:
+        if value is None:
+            return None
+        if value.tzinfo is not None:
+            return value.astimezone(timezone.utc).replace(tzinfo=None)
+        return value
 
     def export_csv(self, csv_file: str):
         """Export timeline to CSV for analysis."""
