@@ -65,7 +65,6 @@ htmlcov/
 
 # Git
 .git/
-.github/
 
 # OS
 .DS_Store
