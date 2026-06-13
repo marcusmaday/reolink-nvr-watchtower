@@ -13,7 +13,7 @@ Features:
 import os
 import logging
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, List, Any
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -180,7 +180,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Reolink NVR HA App",
     description="REST API wrapper for Reolink NVR recording search and filtering",
-    version="0.2.5",
+    version="0.2.6",
     lifespan=lifespan,
 )
 
@@ -201,7 +201,7 @@ def _normalize_event_type(event_type: Optional[str]) -> Optional[str]:
 
 def _timeline_entry_to_recent(entry: TimelineEntry) -> dict[str, Any]:
     metadata = entry.metadata or {}
-    clip_source = entry.clip_path or metadata.get("clip_url") or metadata.get("download_url") or metadata.get("stream_url") or metadata.get("live_url")
+    clip_source = entry.clip_path or metadata.get("clip_url") or metadata.get("download_url") or metadata.get("stream_url")
     live_source = metadata.get("live_url")
     clip_url = f"api/events/{entry.entry_id}/clip" if clip_source else None
     live_url = f"api/events/{entry.entry_id}/live" if live_source else None
@@ -245,27 +245,51 @@ async def _broadcast_recent_event(entry: TimelineEntry):
     ui_clients[:] = alive_clients
 
 
-async def _resolve_clip_for_event(channel: int, event_type: str, timestamp: datetime, stream: str = "sub") -> tuple[Optional[str], Optional[str], Optional[str]]:
+async def _resolve_clip_for_event(
+    channel: int,
+    event_type: str,
+    timestamp: datetime,
+    stream: str = "sub",
+    lookback_seconds: int = 90,
+    lookahead_seconds: int = 180,
+    retries: int = 2,
+    retry_delay_seconds: float = 2.0,
+) -> tuple[Optional[str], Optional[str], Optional[str]]:
     if not nvr_host:
         return None, None, None
 
-    try:
-        clips = await search_recordings(
+    target_ts = timestamp
+
+    async def _search_once() -> list[dict]:
+        start_dt = target_ts - timedelta(seconds=lookback_seconds)
+        end_dt = target_ts + timedelta(seconds=lookahead_seconds)
+        return await search_recordings(
             host=nvr_host,
             channel=channel,
-            start_dt=timestamp,
-            end_dt=timestamp,
+            start_dt=start_dt,
+            end_dt=end_dt,
             event_type=event_type,
             stream=stream,
         )
-    except Exception as e:
-        logger.debug("Unable to resolve clip for event: %s", e)
-        return None, None, None
+
+    clips: list[dict] = []
+    last_error: Optional[Exception] = None
+    for attempt in range(retries + 1):
+        try:
+            clips = await _search_once()
+            if clips:
+                break
+        except Exception as e:
+            last_error = e
+            logger.debug("Unable to resolve clip for event (attempt %d/%d): %s", attempt + 1, retries + 1, e)
+
+        if attempt < retries:
+            await asyncio.sleep(retry_delay_seconds)
 
     if not clips:
+        if last_error:
+            logger.debug("Unable to resolve clip for event after retries: %s", last_error)
         return None, None, None
-
-    target_ts = timestamp
 
     def _distance_seconds(clip: dict[str, Any]) -> float:
         try:
@@ -297,7 +321,6 @@ def _entry_media_source(entry: TimelineEntry, kind: str) -> Optional[str]:
             or metadata.get("clip_url")
             or metadata.get("download_url")
             or metadata.get("stream_url")
-            or metadata.get("live_url")
         )
     if kind == "live":
         return metadata.get("live_url") or metadata.get("stream_url") or entry.clip_path
@@ -339,7 +362,7 @@ async def root(request: Request):
         return HTMLResponse(_dashboard_html())
     return {
         "name": "Reolink NVR HA App",
-        "version": "0.2.5",
+        "version": "0.2.6",
         "status": "running",
         "docs": "/docs",
         "health": "/api/health",
@@ -579,7 +602,7 @@ async def ingest_event(payload: EventIngestRequest):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=f"Invalid timestamp: {e}")
 
-    clip_url = payload.clip_url or payload.download_url or payload.stream_url or payload.live_url
+    clip_url = payload.clip_url or payload.download_url or payload.stream_url
     stream_url = payload.stream_url
     download_url = payload.download_url
 
@@ -590,7 +613,7 @@ async def ingest_event(payload: EventIngestRequest):
             timestamp=event_timestamp,
         )
 
-    final_clip_url = clip_url or payload.live_url
+    final_clip_url = clip_url
 
     entry = TimelineEntry(
         entry_id=payload.event_id or f"{payload.channel}_{event_timestamp.isoformat()}_{event_type}",
