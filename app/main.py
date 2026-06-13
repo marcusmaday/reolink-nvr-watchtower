@@ -13,7 +13,7 @@ Features:
 import os
 import logging
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Any
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -180,7 +180,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Reolink NVR HA App",
     description="REST API wrapper for Reolink NVR recording search and filtering",
-    version="0.2.6",
+    version="0.2.7",
     lifespan=lifespan,
 )
 
@@ -197,6 +197,12 @@ def _normalize_event_type(event_type: Optional[str]) -> Optional[str]:
         return None
     normalized = event_type.strip().upper()
     return normalized if normalized in EVENT_TYPE_MAP else None
+
+
+def _normalize_datetime_for_compare(value: datetime) -> datetime:
+    if value.tzinfo is not None:
+        return value.astimezone(timezone.utc).replace(tzinfo=None)
+    return value
 
 
 def _timeline_entry_to_recent(entry: TimelineEntry) -> dict[str, Any]:
@@ -293,10 +299,10 @@ async def _resolve_clip_for_event(
 
     def _distance_seconds(clip: dict[str, Any]) -> float:
         try:
-            clip_ts = datetime.fromisoformat(clip["timestamp"])
+            clip_ts = _normalize_datetime_for_compare(datetime.fromisoformat(clip["timestamp"]))
         except Exception:
             return float("inf")
-        return abs((clip_ts - target_ts).total_seconds())
+        return abs((_normalize_datetime_for_compare(clip_ts) - _normalize_datetime_for_compare(target_ts)).total_seconds())
 
     best_clip = min(clips, key=_distance_seconds)
     return (
@@ -362,7 +368,7 @@ async def root(request: Request):
         return HTMLResponse(_dashboard_html())
     return {
         "name": "Reolink NVR HA App",
-        "version": "0.2.6",
+        "version": "0.2.7",
         "status": "running",
         "docs": "/docs",
         "health": "/api/health",
@@ -601,6 +607,7 @@ async def ingest_event(payload: EventIngestRequest):
         event_timestamp = datetime.fromisoformat(payload.timestamp) if payload.timestamp else datetime.now()
     except ValueError as e:
         raise HTTPException(status_code=400, detail=f"Invalid timestamp: {e}")
+    event_timestamp = _normalize_datetime_for_compare(event_timestamp)
 
     clip_url = payload.clip_url or payload.download_url or payload.stream_url
     stream_url = payload.stream_url
