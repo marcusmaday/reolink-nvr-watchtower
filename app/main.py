@@ -36,6 +36,7 @@ from video_buffer import VideoBufferManager
 from clip_generator import ClipGenerator, ClipMetadata
 from timeline_index import TimelineIndex, TimelineEntry
 from storage_manager import StorageManager
+from rolling_buffer import RollingSegmentBuffer
 from reolink_search import search_recordings, get_channels_info, EVENT_TYPE_MAP
 
 # ─── Config (from env / HA add-on options) ────────────────────────────────────
@@ -46,13 +47,15 @@ NVR_PASSWORD = os.getenv("NVR_PASSWORD", "password")
 NVR_SSL      = os.getenv("NVR_SSL",  "false").lower() == "true"
 DEBUG        = os.getenv("DEBUG",    "false").lower() == "true"
 API_PORT     = int(os.getenv("API_PORT", "5000"))
-LOCAL_CLIP_ENABLED = os.getenv("LOCAL_CLIP_ENABLED", "true").lower() == "true"
+LOCAL_CLIP_ENABLED = os.getenv("BUFFER_ENABLED", "true").lower() == "true"
 LOCAL_CLIP_SECONDS = max(
     int(os.getenv("CLIP_DURATION_BEFORE", "5")) + int(os.getenv("CLIP_DURATION_AFTER", "5")),
     int(os.getenv("LOCAL_CLIP_SECONDS", "12")),
     1,
 )
 FFMPEG_BIN = os.getenv("FFMPEG_BIN", "ffmpeg")
+ROLLING_BUFFER_CHANNEL = int(os.getenv("ROLLING_BUFFER_CHANNEL", "8"))
+ROLLING_SEGMENT_SECONDS = int(os.getenv("ROLLING_SEGMENT_SECONDS", "2"))
 
 logging.basicConfig(
     level=logging.DEBUG if DEBUG else logging.INFO,
@@ -65,6 +68,7 @@ nvr_host: Optional[Host] = None
 timeline_index: Optional[TimelineIndex] = None
 ui_clients: list[WebSocket] = []
 clip_tasks: set[asyncio.Task] = set()
+rolling_buffer: Optional[RollingSegmentBuffer] = None
 
 
 # ─── Pydantic models ──────────────────────────────────────────────────────────
@@ -149,7 +153,7 @@ class RecentEvent(BaseModel):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global nvr_host, timeline_index   # ← also add timeline_index here
+    global nvr_host, timeline_index, rolling_buffer
 
     logger.info("Starting Reolink NVR HA App...")
     logger.info("Connecting to NVR at %s:%s", NVR_HOST, NVR_PORT)
@@ -175,9 +179,30 @@ async def lifespan(app: FastAPI):
     timeline_index = TimelineIndex(index_file=f"{index_path}/timeline.json")
     logger.info("Timeline index initialized at %s/timeline.json", index_path)
 
+    if LOCAL_CLIP_ENABLED and nvr_host:
+        try:
+            rolling_buffer = RollingSegmentBuffer(
+                nvr_client=nvr_host,
+                channel=ROLLING_BUFFER_CHANNEL,
+                storage_dir=f"{index_path}/rolling_buffer/channel_{ROLLING_BUFFER_CHANNEL}",
+                segment_seconds=ROLLING_SEGMENT_SECONDS,
+                retention_seconds=LOCAL_CLIP_SECONDS + 20,
+                ffmpeg_bin=FFMPEG_BIN,
+                stream="sub",
+            )
+            await rolling_buffer.start()
+        except Exception as e:
+            logger.error("Failed to start rolling buffer: %s", e)
+            rolling_buffer = None
+
     yield  # ← app runs here
 
     logger.info("Shutting down Reolink NVR HA App...")
+    if rolling_buffer:
+        try:
+            await rolling_buffer.stop()
+        except Exception as e:
+            logger.error("Error stopping rolling buffer: %s", e)
     if nvr_host:
         try:
             await nvr_host.logout()
@@ -189,7 +214,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Reolink NVR HA App",
     description="REST API wrapper for Reolink NVR recording search and filtering",
-    version="0.4.0",
+    version="0.4.1",
     lifespan=lifespan,
 )
 
@@ -370,27 +395,18 @@ def _event_clip_storage_path(channel: int, timestamp: datetime, event_type: str)
     return day_dir / clip_name
 
 
-async def _capture_local_event_clip(entry: TimelineEntry) -> None:
-    if not nvr_host:
-        return
-
-    rtsp_url = None
-    try:
-        rtsp_url = nvr_host.rtsp(entry.channel, "sub")
-    except Exception as e:
-        logger.warning("Unable to resolve RTSP for channel %s: %s", entry.channel, e)
-        return
-
-    if not rtsp_url:
-        logger.warning("No RTSP URL available for channel %s", entry.channel)
+async def _generate_buffered_event_clip(entry: TimelineEntry) -> None:
+    if not rolling_buffer:
+        logger.debug("Rolling buffer unavailable for %s", entry.entry_id)
         return
 
     clip_path = _event_clip_storage_path(entry.channel, entry.timestamp, entry.event_type)
-    clip_seconds = max(LOCAL_CLIP_SECONDS, 1)
+    clip_start = entry.timestamp - timedelta(seconds=max(int(os.getenv("CLIP_DURATION_BEFORE", "5")), 1))
+    clip_end = entry.timestamp + timedelta(seconds=max(int(os.getenv("CLIP_DURATION_AFTER", "5")), 1))
 
-    metadata = dict(entry.metadata or {})
-    metadata["clip_status"] = "generating"
-    metadata["clip_source"] = "local_rtsp"
+    generating_metadata = dict(entry.metadata or {})
+    generating_metadata["clip_status"] = "generating"
+    generating_metadata["clip_source"] = "rolling_rtsp"
     generating_entry = TimelineEntry(
         entry_id=entry.entry_id,
         timestamp=entry.timestamp,
@@ -398,98 +414,37 @@ async def _capture_local_event_clip(entry: TimelineEntry) -> None:
         event_type=entry.event_type,
         clip_path=entry.clip_path,
         thumbnail_path=entry.thumbnail_path,
-        metadata=metadata,
+        metadata=generating_metadata,
     )
     timeline_index.upsert_entry(generating_entry)
     await _broadcast_recent_event(generating_entry)
 
     try:
-        last_error: Optional[str] = None
-        for cmd in (
-            [
-                FFMPEG_BIN,
-                "-y",
-                "-loglevel",
-                "error",
-                "-rtsp_transport",
-                "tcp",
-                "-i",
-                rtsp_url,
-                "-t",
-                str(clip_seconds),
-                "-c",
-                "copy",
-                "-an",
-                "-movflags",
-                "+faststart",
-                str(clip_path),
-            ],
-            [
-                FFMPEG_BIN,
-                "-y",
-                "-loglevel",
-                "error",
-                "-rtsp_transport",
-                "tcp",
-                "-i",
-                rtsp_url,
-                "-t",
-                str(clip_seconds),
-                "-c:v",
-                "libx264",
-                "-preset",
-                "veryfast",
-                "-crf",
-                "28",
-                "-pix_fmt",
-                "yuv420p",
-                "-an",
-                "-movflags",
-                "+faststart",
-                str(clip_path),
-            ],
-        ):
-            if clip_path.exists():
-                clip_path.unlink()
-
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            _, stderr = await proc.communicate()
-            if proc.returncode == 0 and clip_path.exists() and clip_path.stat().st_size > 0:
-                last_error = None
-                break
-
-            last_error = (stderr or b"").decode("utf-8", "ignore").strip() or f"ffmpeg exited with {proc.returncode}"
-        if last_error:
-            raise RuntimeError(last_error)
-
-        if not clip_path.exists() or clip_path.stat().st_size == 0:
-            raise RuntimeError("ffmpeg completed but clip file was not created")
+        result_path = await rolling_buffer.build_clip(clip_start, clip_end, str(clip_path))
+        if not result_path:
+            raise RuntimeError("No buffered segments were available for the requested window")
 
         ready_metadata = dict(entry.metadata or {})
         ready_metadata["clip_status"] = "ready"
-        ready_metadata["clip_source"] = "local_rtsp"
-        ready_metadata["clip_file"] = str(clip_path)
-        ready_metadata["duration_seconds"] = clip_seconds
+        ready_metadata["clip_source"] = "rolling_rtsp"
+        ready_metadata["clip_file"] = result_path
+        ready_metadata["duration_seconds"] = max(int((clip_end - clip_start).total_seconds()), 1)
         ready_entry = TimelineEntry(
             entry_id=entry.entry_id,
             timestamp=entry.timestamp,
             channel=entry.channel,
             event_type=entry.event_type,
-            clip_path=str(clip_path),
+            clip_path=result_path,
             thumbnail_path=entry.thumbnail_path,
             metadata=ready_metadata,
         )
         timeline_index.upsert_entry(ready_entry)
         await _broadcast_recent_event(ready_entry)
-        logger.info("Local clip generated for %s: %s", entry.entry_id, clip_path)
+        logger.info("Buffered clip generated for %s: %s", entry.entry_id, result_path)
     except Exception as e:
         failed_metadata = dict(entry.metadata or {})
         failed_metadata["clip_status"] = "failed"
-        failed_metadata["clip_source"] = "local_rtsp"
+        failed_metadata["clip_source"] = "rolling_rtsp"
         failed_metadata["clip_error"] = str(e)
         failed_entry = TimelineEntry(
             entry_id=entry.entry_id,
@@ -502,14 +457,18 @@ async def _capture_local_event_clip(entry: TimelineEntry) -> None:
         )
         timeline_index.upsert_entry(failed_entry)
         await _broadcast_recent_event(failed_entry)
-        logger.error("Failed to generate local clip for %s: %s", entry.entry_id, e)
+        logger.error("Failed to generate buffered clip for %s: %s", entry.entry_id, e)
 
 
 def _schedule_clip_generation(entry: TimelineEntry) -> None:
     if not LOCAL_CLIP_ENABLED:
         return
 
-    task = asyncio.create_task(_capture_local_event_clip(entry))
+    if not rolling_buffer:
+        logger.warning("Rolling buffer is not available; cannot generate pre-roll clip for %s", entry.entry_id)
+        return
+
+    task = asyncio.create_task(_generate_buffered_event_clip(entry))
     clip_tasks.add(task)
 
     def _done_callback(t: asyncio.Task) -> None:
@@ -582,7 +541,7 @@ async def root(request: Request):
         return HTMLResponse(_dashboard_html())
     return {
         "name": "Reolink NVR HA App",
-        "version": "0.4.0",
+        "version": "0.4.1",
         "status": "running",
         "docs": "/docs",
         "health": "/api/health",

@@ -130,7 +130,7 @@ class NVRClient:
             raise RuntimeError("NVR not connected")
 
         try:
-            url = self._host.rtsp(channel, stream)
+            url = await self._host.get_rtsp_stream_source(channel, stream=stream)
             return url
         except Exception as e:
             logger.error("Failed to get RTSP URL for channel %d: %s", channel, e)
