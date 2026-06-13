@@ -180,7 +180,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Reolink NVR HA App",
     description="REST API wrapper for Reolink NVR recording search and filtering",
-    version="0.2.7",
+    version="0.2.9",
     lifespan=lifespan,
 )
 
@@ -336,27 +336,35 @@ def _entry_media_source(entry: TimelineEntry, kind: str) -> Optional[str]:
 async def _proxy_http_media(url: str):
     import aiohttp
 
-    timeout = aiohttp.ClientTimeout(total=None)
-    session = aiohttp.ClientSession(timeout=timeout)
-    upstream = await session.get(url)
+    timeout = aiohttp.ClientTimeout(total=120, connect=15, sock_connect=15, sock_read=120)
+    last_error: Optional[Exception] = None
 
-    if upstream.status >= 400:
-        text = await upstream.text()
-        await upstream.release()
-        await session.close()
-        raise HTTPException(status_code=upstream.status, detail=text[:500] or f"Upstream media request failed: {upstream.status}")
-
-    content_type = upstream.headers.get("Content-Type", "application/octet-stream")
-
-    async def body_iter():
+    for attempt in range(3):
         try:
-            async for chunk in upstream.content.iter_chunked(64 * 1024):
-                yield chunk
-        finally:
-            await upstream.release()
-            await session.close()
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(url) as upstream:
+                    if upstream.status >= 400:
+                        text = await upstream.text()
+                        raise HTTPException(
+                            status_code=upstream.status,
+                            detail=text[:500] or f"Upstream media request failed: {upstream.status}",
+                        )
 
-    return StreamingResponse(body_iter(), media_type=content_type)
+                    content_type = upstream.headers.get("Content-Type", "application/octet-stream")
+
+                    async def body_iter():
+                        async for chunk in upstream.content.iter_chunked(64 * 1024):
+                            yield chunk
+
+                    return StreamingResponse(body_iter(), media_type=content_type)
+        except aiohttp.ServerDisconnectedError as e:
+            last_error = e
+            logger.warning("Upstream media server disconnected on attempt %d/3: %s", attempt + 1, e)
+        except aiohttp.ClientError as e:
+            last_error = e
+            logger.warning("Upstream media request failed on attempt %d/3: %s", attempt + 1, e)
+
+    raise HTTPException(status_code=502, detail=f"Unable to fetch media from source: {last_error}")
 
 
 # ─── Endpoints ────────────────────────────────────────────────────────────────
@@ -368,7 +376,7 @@ async def root(request: Request):
         return HTMLResponse(_dashboard_html())
     return {
         "name": "Reolink NVR HA App",
-        "version": "0.2.7",
+        "version": "0.2.9",
         "status": "running",
         "docs": "/docs",
         "health": "/api/health",
@@ -607,7 +615,6 @@ async def ingest_event(payload: EventIngestRequest):
         event_timestamp = datetime.fromisoformat(payload.timestamp) if payload.timestamp else datetime.now()
     except ValueError as e:
         raise HTTPException(status_code=400, detail=f"Invalid timestamp: {e}")
-    event_timestamp = _normalize_datetime_for_compare(event_timestamp)
 
     clip_url = payload.clip_url or payload.download_url or payload.stream_url
     stream_url = payload.stream_url
@@ -924,17 +931,18 @@ def _dashboard_html() -> str:
       state.selected = id;
       render();
       const clipUrl = entry.clip_url;
-      const rawClipUrl = entry.raw_clip_url || clipUrl;
       const snapshotUrl = entry.thumbnail_url || entry.metadata?.snapshot_url;
-      if (clipUrl && rawClipUrl && !String(rawClipUrl).startsWith('rtsp://') && !String(rawClipUrl).startsWith('entityId:')) {
+      if (clipUrl) {
         snapshot.hidden = true;
         player.hidden = false;
+        player.poster = snapshotUrl || '';
         player.src = clipUrl;
         if (userInitiated) player.play().catch(() => {});
       } else if (snapshotUrl) {
         player.pause();
         player.removeAttribute('src');
         player.load();
+        player.removeAttribute('poster');
         snapshot.src = snapshotUrl;
         snapshot.hidden = false;
         player.hidden = true;
@@ -945,7 +953,6 @@ def _dashboard_html() -> str:
         <div>${escapeHtml(entry.camera_name ? `Camera: ${entry.camera_name}` : `Channel: ${entry.channel}`)}</div>
         <div>${escapeHtml(entry.message || '')}</div>
         <div class="row">
-          ${entry.clip_url ? `<a class="chip" href="${entry.clip_url}" target="_blank" rel="noreferrer">Open clip</a>` : ''}
           ${entry.live_url ? `<a class="chip" href="${entry.live_url}" target="_blank" rel="noreferrer">Open live</a>` : ''}
         </div>
       `;

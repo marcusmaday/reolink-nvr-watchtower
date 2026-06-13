@@ -274,12 +274,12 @@ async def _process_vod_file(
         logger.debug("Could not generate stream URL for VOD file: %s", e)
 
     try:
-        # Prefer the NVR download URL for browser playback; it usually yields MP4.
+        # Prefer the direct download URL for browser playback; it usually yields MP4.
         download_mime, download_source = await host.get_vod_source(
             channel,
             str(file_name),
             stream,
-            request_type=VodRequestType.NVR_DOWNLOAD,
+            request_type=VodRequestType.DOWNLOAD,
         )
         download_url = download_source or None
         if not stream_url:
