@@ -6,6 +6,7 @@ Reolink Enhanced API is a Home Assistant app and REST service for browsing Reoli
 
 - Search recordings by date, channel, and event type
 - View a timeline of recent person, motion, vehicle, animal, and doorbell events
+- Open a live event dashboard at `/app` that jumps straight to the newest alert
 - Generate clip URLs for playback or download
 - Run as a Home Assistant app or as a local Docker service
 
@@ -28,8 +29,9 @@ Reolink Enhanced API is a Home Assistant app and REST service for browsing Reoli
 
 1. Configure your NVR connection in the Home Assistant app or in `.env` for local Docker.
 2. Start the service.
-3. Open the API at `http://localhost:5000/docs`.
-4. Try a search.
+3. Open the dashboard at `http://localhost:5000/app`.
+4. Open the API docs at `http://localhost:5000/docs`.
+5. Try a search.
 
 ```bash
 curl "http://localhost:5000/api/search?channel=8&start_date=2026-06-11&event_type=PERSON&stream=main"

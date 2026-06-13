@@ -90,6 +90,27 @@ class TimelineIndex:
         logger.debug("Added timeline entry: %s", entry.entry_id)
         return entry.entry_id
 
+    def upsert_entry(self, entry: TimelineEntry) -> str:
+        """Insert or replace an entry by ID."""
+        if not entry.entry_id:
+            entry.entry_id = f"{entry.channel}_{entry.timestamp.timestamp()}_{entry.event_type}"
+
+        for idx, existing in enumerate(self.entries):
+            if existing.entry_id == entry.entry_id:
+                self.entries[idx] = entry
+                self._save_index()
+                logger.debug("Updated timeline entry: %s", entry.entry_id)
+                return entry.entry_id
+
+        return self.add_entry(entry)
+
+    def get_entry(self, entry_id: str) -> Optional[TimelineEntry]:
+        """Return a single entry by ID."""
+        for entry in self.entries:
+            if entry.entry_id == entry_id:
+                return entry
+        return None
+
     def get_entries(
         self,
         channel: Optional[int] = None,

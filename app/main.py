@@ -14,13 +14,13 @@ import os
 import logging
 import asyncio
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional, List, Any
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Query, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import JSONResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import uvicorn
 
 from reolink_aio.api import Host
@@ -54,6 +54,7 @@ logger = logging.getLogger(__name__)
 # Global NVR host instance
 nvr_host: Optional[Host] = None
 timeline_index: Optional[TimelineIndex] = None
+ui_clients: list[WebSocket] = []
 
 
 # ─── Pydantic models ──────────────────────────────────────────────────────────
@@ -100,6 +101,39 @@ class HealthCheck(BaseModel):
     nvr_host:      str
 
 
+class EventIngestRequest(BaseModel):
+    event_type: str
+    channel: int
+    timestamp: Optional[str] = None
+    event_id: Optional[str] = None
+    source: str = "home_assistant"
+    title: Optional[str] = None
+    message: Optional[str] = None
+    camera_name: Optional[str] = None
+    snapshot_url: Optional[str] = None
+    clip_url: Optional[str] = None
+    stream_url: Optional[str] = None
+    download_url: Optional[str] = None
+    live_url: Optional[str] = None
+    duration_seconds: Optional[int] = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class RecentEvent(BaseModel):
+    entry_id: str
+    timestamp: str
+    channel: int
+    event_type: str
+    clip_url: Optional[str] = None
+    thumbnail_url: Optional[str] = None
+    title: Optional[str] = None
+    message: Optional[str] = None
+    camera_name: Optional[str] = None
+    source: Optional[str] = None
+    duration_seconds: Optional[int] = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 # ─── Lifespan (startup / shutdown) ───────────────────────────────────────────
 
 @asynccontextmanager
@@ -144,7 +178,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Reolink NVR HA App",
     description="REST API wrapper for Reolink NVR recording search and filtering",
-    version="0.1.0",
+    version="0.2.2",
     lifespan=lifespan,
 )
 
@@ -156,13 +190,97 @@ def _require_nvr():
         raise HTTPException(status_code=503, detail="NVR not connected. Check add-on logs.")
 
 
+def _normalize_event_type(event_type: Optional[str]) -> Optional[str]:
+    if event_type is None:
+        return None
+    normalized = event_type.strip().upper()
+    return normalized if normalized in EVENT_TYPE_MAP else None
+
+
+def _timeline_entry_to_recent(entry: TimelineEntry) -> dict[str, Any]:
+    metadata = entry.metadata or {}
+    clip_url = entry.clip_path or metadata.get("clip_url") or metadata.get("download_url") or metadata.get("stream_url") or metadata.get("live_url")
+    thumbnail_url = entry.thumbnail_path or metadata.get("thumbnail_url") or metadata.get("snapshot_url")
+    return {
+        "entry_id": entry.entry_id,
+        "timestamp": entry.timestamp.isoformat(),
+        "channel": entry.channel,
+        "event_type": entry.event_type,
+        "clip_url": clip_url,
+        "thumbnail_url": thumbnail_url,
+        "title": metadata.get("title"),
+        "message": metadata.get("message"),
+        "camera_name": metadata.get("camera_name"),
+        "source": metadata.get("source"),
+        "duration_seconds": metadata.get("duration_seconds"),
+        "metadata": metadata,
+    }
+
+
+async def _broadcast_recent_event(entry: TimelineEntry):
+    if not ui_clients:
+        return
+
+    payload = {
+        "type": "event",
+        "event": _timeline_entry_to_recent(entry),
+    }
+
+    alive_clients: list[WebSocket] = []
+    for socket in list(ui_clients):
+        try:
+            await socket.send_json(payload)
+            alive_clients.append(socket)
+        except Exception:
+            continue
+
+    ui_clients[:] = alive_clients
+
+
+async def _resolve_clip_for_event(channel: int, event_type: str, timestamp: datetime, stream: str = "sub") -> tuple[Optional[str], Optional[str], Optional[str]]:
+    if not nvr_host:
+        return None, None, None
+
+    try:
+        clips = await search_recordings(
+            host=nvr_host,
+            channel=channel,
+            start_dt=timestamp,
+            end_dt=timestamp,
+            event_type=event_type,
+            stream=stream,
+        )
+    except Exception as e:
+        logger.debug("Unable to resolve clip for event: %s", e)
+        return None, None, None
+
+    if not clips:
+        return None, None, None
+
+    target_ts = timestamp
+
+    def _distance_seconds(clip: dict[str, Any]) -> float:
+        try:
+            clip_ts = datetime.fromisoformat(clip["timestamp"])
+        except Exception:
+            return float("inf")
+        return abs((clip_ts - target_ts).total_seconds())
+
+    best_clip = min(clips, key=_distance_seconds)
+    return (
+        best_clip.get("download_url") or best_clip.get("stream_url"),
+        best_clip.get("stream_url"),
+        best_clip.get("download_url"),
+    )
+
+
 # ─── Endpoints ────────────────────────────────────────────────────────────────
 
 @app.get("/", summary="API root")
 async def root():
     return {
         "name":    "Reolink NVR HA App",
-        "version": "0.1.0",
+        "version": "0.2.2",
         "status":  "running",
         "docs":    "/docs",
         "health":  "/api/health",
@@ -289,28 +407,31 @@ async def search(
     clips = [Clip(**c) for c in raw_clips]
 
     for clip in clips:
-        if clip.event_type not in EVENT_TYPE_MAP:
+        if _normalize_event_type(clip.event_type) is None:
             continue
 
         entry_id = f"{channel}_{clip.timestamp}_{clip.event_type}"
-        if not any(entry.entry_id == entry_id for entry in timeline_index.entries):
-            timeline_index.add_entry(
-                TimelineEntry(
-                    entry_id=entry_id,
-                    timestamp=datetime.fromisoformat(clip.timestamp),
-                    channel=channel,
-                    event_type=clip.event_type,
-                    clip_path=clip.download_url or clip.stream_url,
-                    metadata={
-                        "end_timestamp": clip.end_timestamp,
-                        "duration_seconds": clip.duration_seconds,
-                        "trigger": clip.trigger,
-                        "file_name": clip.file_name,
-                        "stream_url": clip.stream_url,
-                        "download_url": clip.download_url,
-                    },
-                )
-            )
+        entry = TimelineEntry(
+            entry_id=entry_id,
+            timestamp=datetime.fromisoformat(clip.timestamp),
+            channel=channel,
+            event_type=clip.event_type,
+            clip_path=clip.download_url or clip.stream_url,
+            thumbnail_path=None,
+            metadata={
+                "title": f"{clip.event_type.title()} event",
+                "message": f"{clip.event_type.title()} detected on channel {channel}",
+                "end_timestamp": clip.end_timestamp,
+                "duration_seconds": clip.duration_seconds,
+                "trigger": clip.trigger,
+                "file_name": clip.file_name,
+                "stream_url": clip.stream_url,
+                "download_url": clip.download_url,
+                "source": "search",
+            },
+        )
+        timeline_index.upsert_entry(entry)
+        await _broadcast_recent_event(entry)
 
     return SearchResponse(
         channel=channel,
@@ -328,9 +449,14 @@ async def get_timeline(
     event_type: Optional[str] = Query(None, description="Filter by event type"),
     limit: int = Query(100, description="Maximum number of entries to return"),
 ):
+    if event_type is not None and _normalize_event_type(event_type) is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid event_type '{event_type}'. Must be one of: {', '.join(EVENT_TYPE_MAP.keys())}",
+        )
     entries = timeline_index.get_entries(
         channel=channel,
-        event_type=event_type,
+        event_type=_normalize_event_type(event_type),
         since=datetime.now() - __import__('datetime').timedelta(hours=hours),
         limit=limit,
     )
@@ -343,12 +469,331 @@ async def get_timeline(
     }
 
 
+@app.get("/api/events/recent", summary="Get recent player-ready events")
+async def get_recent_events(
+    limit: int = Query(20, description="Maximum number of events to return"),
+    channel: Optional[int] = Query(None, description="Filter by channel"),
+    event_type: Optional[str] = Query(None, description="Filter by event type"),
+):
+    normalized_event_type = _normalize_event_type(event_type)
+    if event_type is not None and normalized_event_type is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid event_type '{event_type}'. Must be one of: {', '.join(EVENT_TYPE_MAP.keys())}",
+        )
+    entries = timeline_index.get_entries(
+        channel=channel,
+        event_type=normalized_event_type,
+        limit=limit,
+    )
+    return {
+        "limit": limit,
+        "channel": channel,
+        "event_type": normalized_event_type,
+        "total": len(entries),
+        "events": [_timeline_entry_to_recent(entry) for entry in entries],
+    }
+
+
+@app.post("/api/events/ingest", summary="Ingest a live event from Home Assistant or another source")
+async def ingest_event(payload: EventIngestRequest):
+    _require_nvr()
+
+    event_type = _normalize_event_type(payload.event_type)
+    if event_type is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid event_type '{payload.event_type}'. Must be one of: {', '.join(EVENT_TYPE_MAP.keys())}",
+        )
+
+    if payload.channel < 0 or payload.channel >= nvr_host.num_channels:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Channel {payload.channel} out of range. NVR has {nvr_host.num_channels} channels (0-based).",
+        )
+
+    try:
+        event_timestamp = datetime.fromisoformat(payload.timestamp) if payload.timestamp else datetime.now()
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid timestamp: {e}")
+
+    clip_url = payload.clip_url or payload.download_url or payload.stream_url or payload.live_url
+    stream_url = payload.stream_url
+    download_url = payload.download_url
+
+    if not clip_url:
+        clip_url, stream_url, download_url = await _resolve_clip_for_event(
+            channel=payload.channel,
+            event_type=event_type,
+            timestamp=event_timestamp,
+        )
+
+    final_clip_url = clip_url or payload.live_url
+
+    entry = TimelineEntry(
+        entry_id=payload.event_id or f"{payload.channel}_{event_timestamp.isoformat()}_{event_type}",
+        timestamp=event_timestamp,
+        channel=payload.channel,
+        event_type=event_type,
+        clip_path=final_clip_url,
+        thumbnail_path=payload.snapshot_url,
+        metadata={
+            **payload.metadata,
+            "title": payload.title or f"{event_type.title()} detected",
+            "message": payload.message or f"{event_type.title()} detected on channel {payload.channel}",
+            "camera_name": payload.camera_name,
+            "source": payload.source,
+            "snapshot_url": payload.snapshot_url,
+            "stream_url": stream_url or payload.stream_url,
+            "download_url": download_url or payload.download_url,
+            "live_url": payload.live_url,
+            "duration_seconds": payload.duration_seconds,
+        },
+    )
+    timeline_index.upsert_entry(entry)
+    await _broadcast_recent_event(entry)
+
+    return {
+        "status": "accepted",
+        "event": _timeline_entry_to_recent(entry),
+    }
+
+
 @app.get("/api/timeline/{entry_id}", summary="Get a single timeline entry")
 async def get_timeline_entry(entry_id: str):
-    entries = [e for e in timeline_index.entries if e.entry_id == entry_id]
-    if not entries:
+    entry = timeline_index.get_entry(entry_id)
+    if not entry:
         raise HTTPException(status_code=404, detail=f"Timeline entry '{entry_id}' not found")
-    return entries[0].to_dict()
+    return _timeline_entry_to_recent(entry)
+
+
+def _dashboard_html() -> str:
+    return """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Reolink Enhanced API</title>
+  <style>
+    :root { color-scheme: dark; --bg: #0f1115; --panel: #171b22; --line: #263041; --text: #e6edf3; --muted: #9aa7b7; --accent: #5aa9ff; --warn: #ffcb6b; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); }
+    header { display:flex; align-items:center; justify-content:space-between; padding: 16px 20px; border-bottom: 1px solid var(--line); background: rgba(15,17,21,.96); position: sticky; top: 0; z-index: 5; }
+    header h1 { margin: 0; font-size: 18px; }
+    header .meta { color: var(--muted); font-size: 13px; }
+    main { display: grid; grid-template-columns: 360px 1fr; min-height: calc(100vh - 65px); }
+    aside { border-right: 1px solid var(--line); background: var(--panel); overflow: auto; }
+    section.player { display: grid; grid-template-rows: auto 1fr auto; min-height: 0; }
+    .toolbar { display:flex; gap: 8px; padding: 14px 16px; border-bottom: 1px solid var(--line); align-items:center; flex-wrap: wrap; }
+    .chip, button { border: 1px solid var(--line); background: #12161d; color: var(--text); padding: 8px 10px; border-radius: 8px; cursor: pointer; font: inherit; }
+    .chip.active { border-color: var(--accent); color: var(--accent); }
+    .events { list-style:none; margin:0; padding:0; }
+    .event { padding: 14px 16px; border-bottom: 1px solid var(--line); cursor: pointer; }
+    .event:hover { background: rgba(90,169,255,.08); }
+    .event.active { background: rgba(90,169,255,.15); }
+    .event .top { display:flex; justify-content:space-between; gap: 12px; font-size: 14px; }
+    .event .time { color: var(--muted); font-size: 12px; margin-top: 4px; }
+    .badge { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; padding: 3px 7px; border-radius: 999px; background: rgba(90,169,255,.16); color: #d5ebff; }
+    .badge.doorbell { background: rgba(255,203,107,.18); color: #ffe4a0; }
+    .player-wrap { padding: 16px; display:grid; gap: 14px; min-height: 0; }
+    video, img.preview { width: 100%; max-height: 64vh; background: #000; border: 1px solid var(--line); border-radius: 8px; object-fit: contain; }
+    .details { display:grid; gap: 6px; padding: 0 16px 16px; color: var(--muted); font-size: 14px; }
+    .details strong { color: var(--text); }
+    .empty { padding: 20px; color: var(--muted); }
+    .row { display:flex; gap: 8px; flex-wrap: wrap; align-items:center; }
+    .muted { color: var(--muted); }
+    @media (max-width: 900px) { main { grid-template-columns: 1fr; } aside { border-right: 0; border-bottom: 1px solid var(--line); } video, img.preview { max-height: 40vh; } }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>Reolink Enhanced API</h1>
+      <div class="meta">Recent doorbell and person events with player-first playback</div>
+    </div>
+    <div class="meta" id="status">Connecting…</div>
+  </header>
+  <main>
+    <aside>
+      <div class="toolbar">
+        <button class="chip active" data-filter="ALL">All</button>
+        <button class="chip" data-filter="PERSON">Person</button>
+        <button class="chip" data-filter="DOORBELL">Doorbell</button>
+      </div>
+      <ul id="events" class="events"></ul>
+    </aside>
+    <section class="player">
+      <div class="toolbar">
+        <div class="row">
+          <button id="refresh">Refresh</button>
+          <span class="muted" id="count">0 events</span>
+        </div>
+      </div>
+      <div class="player-wrap">
+        <video id="player" controls playsinline preload="metadata"></video>
+        <img id="snapshot" class="preview" alt="Event snapshot" hidden>
+      </div>
+      <div class="details" id="details">
+        <div class="empty">No events loaded.</div>
+      </div>
+    </section>
+  </main>
+  <script>
+    const state = { events: [], filter: 'ALL', selected: null, socket: null };
+    const elEvents = document.getElementById('events');
+    const elCount = document.getElementById('count');
+    const elStatus = document.getElementById('status');
+    const player = document.getElementById('player');
+    const snapshot = document.getElementById('snapshot');
+    const details = document.getElementById('details');
+
+    function badgeClass(eventType) {
+      return eventType === 'DOORBELL' ? 'badge doorbell' : 'badge';
+    }
+
+    function formatTime(ts) {
+      try { return new Date(ts).toLocaleString(); } catch (e) { return ts; }
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+    }
+
+    function visibleEvents() {
+      return state.filter === 'ALL' ? state.events : state.events.filter(e => e.event_type === state.filter);
+    }
+
+    function render() {
+      const events = visibleEvents();
+      elCount.textContent = `${events.length} event${events.length === 1 ? '' : 's'}`;
+      elEvents.innerHTML = events.map(e => `
+        <li class="event ${state.selected === e.entry_id ? 'active' : ''}" data-id="${escapeHtml(e.entry_id)}">
+          <div class="top">
+            <strong>${e.title || e.event_type}</strong>
+            <span class="${badgeClass(e.event_type)}">${e.event_type}</span>
+          </div>
+          <div class="time">${formatTime(e.timestamp)}${e.camera_name ? ` • ${e.camera_name}` : ''}</div>
+        </li>`).join('') || '<li class="empty">No recent events.</li>';
+
+      if ((!state.selected || !events.find(e => e.entry_id === state.selected)) && events.length) {
+        selectEvent(events[0].entry_id, false);
+      }
+    }
+
+    function setStatus(text) { elStatus.textContent = text; }
+
+    async function loadRecent() {
+      const resp = await fetch('/api/events/recent?limit=50');
+      const data = await resp.json();
+      state.events = data.events || [];
+      if (!state.selected && state.events.length) state.selected = state.events[0].entry_id;
+      render();
+      if (state.selected) selectEvent(state.selected, false);
+    }
+
+    function selectEvent(id, userInitiated = true) {
+      const entry = state.events.find(e => e.entry_id === id);
+      if (!entry) return;
+      state.selected = id;
+      render();
+      const clipUrl = entry.clip_url;
+      const snapshotUrl = entry.thumbnail_url || entry.metadata?.snapshot_url;
+      if (clipUrl) {
+        snapshot.hidden = true;
+        player.hidden = false;
+        player.src = clipUrl;
+        if (userInitiated) player.play().catch(() => {});
+      } else if (snapshotUrl) {
+        player.pause();
+        player.removeAttribute('src');
+        player.load();
+        snapshot.src = snapshotUrl;
+        snapshot.hidden = false;
+        player.hidden = true;
+      }
+      details.innerHTML = `
+        <div><strong>${escapeHtml(entry.title || entry.event_type)}</strong></div>
+        <div>${escapeHtml(formatTime(entry.timestamp))}</div>
+        <div>${escapeHtml(entry.camera_name ? `Camera: ${entry.camera_name}` : `Channel: ${entry.channel}`)}</div>
+        <div>${escapeHtml(entry.message || '')}</div>
+        <div class="row">
+          ${entry.clip_url ? `<a class="chip" href="${entry.clip_url}" target="_blank" rel="noreferrer">Open clip</a>` : ''}
+          ${entry.metadata?.live_url ? `<a class="chip" href="${entry.metadata.live_url}" target="_blank" rel="noreferrer">Open live</a>` : ''}
+        </div>
+      `;
+    }
+
+    elEvents.addEventListener('click', (ev) => {
+      const li = ev.target.closest('.event');
+      if (!li) return;
+      selectEvent(li.dataset.id, true);
+    });
+
+    document.querySelectorAll('[data-filter]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('[data-filter]').forEach(el => el.classList.remove('active'));
+        btn.classList.add('active');
+        state.filter = btn.dataset.filter;
+        render();
+      });
+    });
+
+    document.getElementById('refresh').addEventListener('click', loadRecent);
+
+    function connectSocket() {
+      const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+      const socket = new WebSocket(`${proto}://${location.host}/ws/events`);
+      state.socket = socket;
+      socket.onopen = () => setStatus('Live');
+      socket.onclose = () => { setStatus('Reconnecting…'); setTimeout(connectSocket, 1500); };
+      socket.onmessage = (event) => {
+        const msg = JSON.parse(event.data);
+        if (msg.type === 'event' && msg.event) {
+          state.events = [msg.event, ...state.events.filter(e => e.entry_id !== msg.event.entry_id)];
+          state.selected = msg.event.entry_id;
+          render();
+          selectEvent(msg.event.entry_id, false);
+        }
+      };
+    }
+
+    loadRecent().then(() => {
+      connectSocket();
+    }).catch(err => {
+      setStatus('Offline');
+      details.innerHTML = `<div class="empty">Failed to load recent events: ${err}</div>`;
+    });
+  </script>
+</body>
+</html>"""
+
+
+@app.get("/app", response_class=HTMLResponse, summary="Open the event dashboard")
+async def app_dashboard():
+    return HTMLResponse(_dashboard_html())
+
+
+@app.websocket("/ws/events")
+async def ws_events(websocket: WebSocket):
+    await websocket.accept()
+    ui_clients.append(websocket)
+    try:
+        await websocket.send_json({
+            "type": "hello",
+            "events": [_timeline_entry_to_recent(entry) for entry in timeline_index.get_entries(limit=20)],
+        })
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        pass
+    finally:
+        if websocket in ui_clients:
+            ui_clients.remove(websocket)
 
 
 @app.get("/api/debug/info", summary="Debug info (requires debug=true in config)")
