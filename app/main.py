@@ -19,7 +19,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import urlparse
 
-from fastapi import FastAPI, Query, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Query, HTTPException, WebSocket, WebSocketDisconnect, Request
 from fastapi.responses import JSONResponse, HTMLResponse, FileResponse, RedirectResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -180,7 +180,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Reolink NVR HA App",
     description="REST API wrapper for Reolink NVR recording search and filtering",
-    version="0.2.3",
+    version="0.2.4",
     lifespan=lifespan,
 )
 
@@ -333,13 +333,17 @@ async def _proxy_http_media(url: str):
 # ─── Endpoints ────────────────────────────────────────────────────────────────
 
 @app.get("/", summary="API root")
-async def root():
+async def root(request: Request):
+    accept = request.headers.get("accept", "")
+    if "text/html" in accept or "application/xhtml+xml" in accept:
+        return HTMLResponse(_dashboard_html())
     return {
-        "name":    "Reolink NVR HA App",
-        "version": "0.2.3",
-        "status":  "running",
-        "docs":    "/docs",
-        "health":  "/api/health",
+        "name": "Reolink NVR HA App",
+        "version": "0.2.4",
+        "status": "running",
+        "docs": "/docs",
+        "health": "/api/health",
+        "app": "/app",
     }
 
 
