@@ -46,6 +46,13 @@ NVR_PASSWORD = os.getenv("NVR_PASSWORD", "password")
 NVR_SSL      = os.getenv("NVR_SSL",  "false").lower() == "true"
 DEBUG        = os.getenv("DEBUG",    "false").lower() == "true"
 API_PORT     = int(os.getenv("API_PORT", "5000"))
+LOCAL_CLIP_ENABLED = os.getenv("LOCAL_CLIP_ENABLED", "true").lower() == "true"
+LOCAL_CLIP_SECONDS = max(
+    int(os.getenv("CLIP_DURATION_BEFORE", "5")) + int(os.getenv("CLIP_DURATION_AFTER", "5")),
+    int(os.getenv("LOCAL_CLIP_SECONDS", "12")),
+    1,
+)
+FFMPEG_BIN = os.getenv("FFMPEG_BIN", "ffmpeg")
 
 logging.basicConfig(
     level=logging.DEBUG if DEBUG else logging.INFO,
@@ -57,6 +64,7 @@ logger = logging.getLogger(__name__)
 nvr_host: Optional[Host] = None
 timeline_index: Optional[TimelineIndex] = None
 ui_clients: list[WebSocket] = []
+clip_tasks: set[asyncio.Task] = set()
 
 
 # ─── Pydantic models ──────────────────────────────────────────────────────────
@@ -128,6 +136,7 @@ class RecentEvent(BaseModel):
     event_type: str
     clip_url: Optional[str] = None
     thumbnail_url: Optional[str] = None
+    clip_status: Optional[str] = None
     title: Optional[str] = None
     message: Optional[str] = None
     camera_name: Optional[str] = None
@@ -180,7 +189,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Reolink NVR HA App",
     description="REST API wrapper for Reolink NVR recording search and filtering",
-    version="0.2.9",
+    version="0.4.0",
     lifespan=lifespan,
 )
 
@@ -222,6 +231,7 @@ def _timeline_entry_to_recent(entry: TimelineEntry) -> dict[str, Any]:
         "live_url": live_url,
         "raw_live_url": live_source,
         "thumbnail_url": thumbnail_url,
+        "clip_status": metadata.get("clip_status"),
         "title": metadata.get("title"),
         "message": metadata.get("message"),
         "camera_name": metadata.get("camera_name"),
@@ -312,6 +322,202 @@ async def _resolve_clip_for_event(
     )
 
 
+async def _hydrate_event_clip(entry: TimelineEntry) -> Optional[TimelineEntry]:
+    metadata = entry.metadata or {}
+    if metadata.get("clip_status") in {"pending", "generating", "failed"} and not entry.clip_path:
+        return entry
+
+    if entry.clip_path or (entry.metadata or {}).get("clip_url") or (entry.metadata or {}).get("download_url") or (entry.metadata or {}).get("stream_url"):
+        return entry
+
+    try:
+        resolved_clip, resolved_stream, resolved_download = await _resolve_clip_for_event(
+            channel=entry.channel,
+            event_type=entry.event_type,
+            timestamp=entry.timestamp,
+        )
+    except Exception as e:
+        logger.debug("On-demand clip resolution failed for %s: %s", entry.entry_id, e)
+        return entry
+
+    if not (resolved_clip or resolved_stream or resolved_download):
+        return entry
+
+    updated_metadata = dict(entry.metadata or {})
+    if resolved_stream:
+        updated_metadata.setdefault("stream_url", resolved_stream)
+    if resolved_download:
+        updated_metadata.setdefault("download_url", resolved_download)
+
+    updated_entry = TimelineEntry(
+        entry_id=entry.entry_id,
+        timestamp=entry.timestamp,
+        channel=entry.channel,
+        event_type=entry.event_type,
+        clip_path=resolved_clip or resolved_download or resolved_stream,
+        thumbnail_path=entry.thumbnail_path,
+        metadata=updated_metadata,
+    )
+    timeline_index.upsert_entry(updated_entry)
+    return updated_entry
+
+
+def _event_clip_storage_path(channel: int, timestamp: datetime, event_type: str) -> Path:
+    base_dir = Path(os.getenv("HOME_ASSISTANT_DATA_DIR", "/data/reolink")) / "event_clips"
+    day_dir = base_dir / f"channel_{channel}" / timestamp.strftime("%Y-%m-%d")
+    day_dir.mkdir(parents=True, exist_ok=True)
+    clip_name = f"{timestamp.strftime('%Y%m%dT%H%M%S')}_{event_type.lower()}.mp4"
+    return day_dir / clip_name
+
+
+async def _capture_local_event_clip(entry: TimelineEntry) -> None:
+    if not nvr_host:
+        return
+
+    rtsp_url = None
+    try:
+        rtsp_url = nvr_host.rtsp(entry.channel, "sub")
+    except Exception as e:
+        logger.warning("Unable to resolve RTSP for channel %s: %s", entry.channel, e)
+        return
+
+    if not rtsp_url:
+        logger.warning("No RTSP URL available for channel %s", entry.channel)
+        return
+
+    clip_path = _event_clip_storage_path(entry.channel, entry.timestamp, entry.event_type)
+    clip_seconds = max(LOCAL_CLIP_SECONDS, 1)
+
+    metadata = dict(entry.metadata or {})
+    metadata["clip_status"] = "generating"
+    metadata["clip_source"] = "local_rtsp"
+    generating_entry = TimelineEntry(
+        entry_id=entry.entry_id,
+        timestamp=entry.timestamp,
+        channel=entry.channel,
+        event_type=entry.event_type,
+        clip_path=entry.clip_path,
+        thumbnail_path=entry.thumbnail_path,
+        metadata=metadata,
+    )
+    timeline_index.upsert_entry(generating_entry)
+    await _broadcast_recent_event(generating_entry)
+
+    try:
+        last_error: Optional[str] = None
+        for cmd in (
+            [
+                FFMPEG_BIN,
+                "-y",
+                "-loglevel",
+                "error",
+                "-rtsp_transport",
+                "tcp",
+                "-i",
+                rtsp_url,
+                "-t",
+                str(clip_seconds),
+                "-c",
+                "copy",
+                "-an",
+                "-movflags",
+                "+faststart",
+                str(clip_path),
+            ],
+            [
+                FFMPEG_BIN,
+                "-y",
+                "-loglevel",
+                "error",
+                "-rtsp_transport",
+                "tcp",
+                "-i",
+                rtsp_url,
+                "-t",
+                str(clip_seconds),
+                "-c:v",
+                "libx264",
+                "-preset",
+                "veryfast",
+                "-crf",
+                "28",
+                "-pix_fmt",
+                "yuv420p",
+                "-an",
+                "-movflags",
+                "+faststart",
+                str(clip_path),
+            ],
+        ):
+            if clip_path.exists():
+                clip_path.unlink()
+
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, stderr = await proc.communicate()
+            if proc.returncode == 0 and clip_path.exists() and clip_path.stat().st_size > 0:
+                last_error = None
+                break
+
+            last_error = (stderr or b"").decode("utf-8", "ignore").strip() or f"ffmpeg exited with {proc.returncode}"
+        if last_error:
+            raise RuntimeError(last_error)
+
+        if not clip_path.exists() or clip_path.stat().st_size == 0:
+            raise RuntimeError("ffmpeg completed but clip file was not created")
+
+        ready_metadata = dict(entry.metadata or {})
+        ready_metadata["clip_status"] = "ready"
+        ready_metadata["clip_source"] = "local_rtsp"
+        ready_metadata["clip_file"] = str(clip_path)
+        ready_metadata["duration_seconds"] = clip_seconds
+        ready_entry = TimelineEntry(
+            entry_id=entry.entry_id,
+            timestamp=entry.timestamp,
+            channel=entry.channel,
+            event_type=entry.event_type,
+            clip_path=str(clip_path),
+            thumbnail_path=entry.thumbnail_path,
+            metadata=ready_metadata,
+        )
+        timeline_index.upsert_entry(ready_entry)
+        await _broadcast_recent_event(ready_entry)
+        logger.info("Local clip generated for %s: %s", entry.entry_id, clip_path)
+    except Exception as e:
+        failed_metadata = dict(entry.metadata or {})
+        failed_metadata["clip_status"] = "failed"
+        failed_metadata["clip_source"] = "local_rtsp"
+        failed_metadata["clip_error"] = str(e)
+        failed_entry = TimelineEntry(
+            entry_id=entry.entry_id,
+            timestamp=entry.timestamp,
+            channel=entry.channel,
+            event_type=entry.event_type,
+            clip_path=entry.clip_path,
+            thumbnail_path=entry.thumbnail_path,
+            metadata=failed_metadata,
+        )
+        timeline_index.upsert_entry(failed_entry)
+        await _broadcast_recent_event(failed_entry)
+        logger.error("Failed to generate local clip for %s: %s", entry.entry_id, e)
+
+
+def _schedule_clip_generation(entry: TimelineEntry) -> None:
+    if not LOCAL_CLIP_ENABLED:
+        return
+
+    task = asyncio.create_task(_capture_local_event_clip(entry))
+    clip_tasks.add(task)
+
+    def _done_callback(t: asyncio.Task) -> None:
+        clip_tasks.discard(t)
+
+    task.add_done_callback(_done_callback)
+
+
 def _is_http_url(value: Optional[str]) -> bool:
     if not value:
         return False
@@ -376,7 +582,7 @@ async def root(request: Request):
         return HTMLResponse(_dashboard_html())
     return {
         "name": "Reolink NVR HA App",
-        "version": "0.2.9",
+        "version": "0.4.0",
         "status": "running",
         "docs": "/docs",
         "health": "/api/health",
@@ -619,22 +825,15 @@ async def ingest_event(payload: EventIngestRequest):
     clip_url = payload.clip_url or payload.download_url or payload.stream_url
     stream_url = payload.stream_url
     download_url = payload.download_url
-
-    if not clip_url:
-        clip_url, stream_url, download_url = await _resolve_clip_for_event(
-            channel=payload.channel,
-            event_type=event_type,
-            timestamp=event_timestamp,
-        )
-
-    final_clip_url = clip_url
+    clip_status = "ready" if clip_url else "pending"
+    clip_source = "provided" if clip_url else "local_rtsp"
 
     entry = TimelineEntry(
         entry_id=payload.event_id or f"{payload.channel}_{event_timestamp.isoformat()}_{event_type}",
         timestamp=event_timestamp,
         channel=payload.channel,
         event_type=event_type,
-        clip_path=final_clip_url,
+        clip_path=clip_url,
         thumbnail_path=payload.snapshot_url,
         metadata={
             **payload.metadata,
@@ -647,10 +846,15 @@ async def ingest_event(payload: EventIngestRequest):
             "download_url": download_url or payload.download_url,
             "live_url": payload.live_url,
             "duration_seconds": payload.duration_seconds,
+            "clip_status": clip_status,
+            "clip_source": clip_source,
         },
     )
     timeline_index.upsert_entry(entry)
     await _broadcast_recent_event(entry)
+
+    if not clip_url:
+        _schedule_clip_generation(entry)
 
     return {
         "status": "accepted",
@@ -673,6 +877,8 @@ async def get_event_clip(entry_id: str):
     entry = timeline_index.get_entry(entry_id)
     if not entry:
         raise HTTPException(status_code=404, detail=f"Timeline entry '{entry_id}' not found")
+
+    entry = await _hydrate_event_clip(entry)
 
     source = _entry_media_source(entry, "clip")
     if not source:
@@ -952,6 +1158,7 @@ def _dashboard_html() -> str:
         <div>${escapeHtml(formatTime(entry.timestamp))}</div>
         <div>${escapeHtml(entry.camera_name ? `Camera: ${entry.camera_name}` : `Channel: ${entry.channel}`)}</div>
         <div>${escapeHtml(entry.message || '')}</div>
+        ${entry.clip_status ? `<div>${escapeHtml(`Clip: ${entry.clip_status}`)}</div>` : ''}
         <div class="row">
           ${entry.live_url ? `<a class="chip" href="${entry.live_url}" target="_blank" rel="noreferrer">Open live</a>` : ''}
         </div>
