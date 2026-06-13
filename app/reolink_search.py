@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo
 
 from reolink_aio.api import Host
 from reolink_aio.exceptions import ReolinkError
+from reolink_aio.enums import VodRequestType
 from reolink_aio.typings import VOD_trigger
 
 logger = logging.getLogger(__name__)
@@ -259,23 +260,32 @@ async def _process_vod_file(
     download_url = None
 
     try:
-        # get_vod_source returns an (url, mime_type) tuple or similar
-        # It generates an authenticated URL to play the clip
-        vod_source = await host.get_vod_source(channel, vod_file, stream)
-        if vod_source:
-            # vod_source may be a string URL or a tuple (url, mime_type)
-            if isinstance(vod_source, tuple):
-                stream_url = vod_source[0]
-            else:
-                stream_url = str(vod_source)
+        # get_vod_source expects the VOD filename, not the whole object.
+        stream_mime, stream_source = await host.get_vod_source(
+            channel,
+            str(file_name),
+            stream,
+            request_type=VodRequestType.FLV,
+        )
+        stream_url = stream_source or None
+        if stream_mime:
+            logger.debug("Stream VOD source mime=%s for %s", stream_mime, file_name)
     except Exception as e:
         logger.debug("Could not generate stream URL for VOD file: %s", e)
 
-    # Try to get NvrDownload URL if available (added in reolink_aio 0.13.3)
     try:
-        download_url = await host.get_vod_source(channel, vod_file, stream, stream_type="download")
-        if isinstance(download_url, tuple):
-            download_url = download_url[0]
+        # Prefer the NVR download URL for browser playback; it usually yields MP4.
+        download_mime, download_source = await host.get_vod_source(
+            channel,
+            str(file_name),
+            stream,
+            request_type=VodRequestType.NVR_DOWNLOAD,
+        )
+        download_url = download_source or None
+        if not stream_url:
+            stream_url = download_url
+        if download_mime:
+            logger.debug("Download VOD source mime=%s for %s", download_mime, file_name)
     except Exception:
         download_url = stream_url  # Fall back to stream URL
 
