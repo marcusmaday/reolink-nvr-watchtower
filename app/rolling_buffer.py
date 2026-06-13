@@ -50,7 +50,7 @@ class RollingSegmentBuffer:
     async def start(self):
         if self._running:
             return
-        self._rtsp_url = await self.nvr_client.get_rtsp_url(self.channel, stream=self.stream)
+        self._rtsp_url = await self._resolve_rtsp_url()
         if not self._rtsp_url:
             raise RuntimeError(f"No RTSP source available for channel {self.channel}")
         self._running = True
@@ -111,6 +111,15 @@ class RollingSegmentBuffer:
             except Exception as e:
                 logger.error("Rolling recorder error for channel %d: %s", self.channel, e)
                 await asyncio.sleep(2)
+
+    async def _resolve_rtsp_url(self) -> Optional[str]:
+        if hasattr(self.nvr_client, "get_rtsp_url"):
+            return await self.nvr_client.get_rtsp_url(self.channel, stream=self.stream)
+        if hasattr(self.nvr_client, "get_rtsp_stream_source"):
+            return await self.nvr_client.get_rtsp_stream_source(self.channel, stream=self.stream)
+        if hasattr(self.nvr_client, "rtsp"):
+            return self.nvr_client.rtsp(self.channel, self.stream)
+        return None
 
     def _load_segments(self) -> list[SegmentFile]:
         segments: list[SegmentFile] = []
