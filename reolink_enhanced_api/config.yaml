@@ -1,5 +1,5 @@
 name: "Reolink Enhanced API"
-version: "0.2.2"
+version: "0.2.3"
 slug: "reolink_enhanced_api"
 description: "REST + WebSocket API wrapper for Reolink NVR with event timeline and clip generation"
 url: "https://github.com/marcusmaday/reolink-nvr-ha-app"
@@ -10,6 +10,11 @@ arch:
 startup: "services"
 boot: "auto"
 host_network: true
+ingress: true
+ingress_port: 5000
+ingress_stream: true
+panel_icon: "mdi:shield-camera"
+panel_title: "Reolink Enhanced"
 ports:
   5000/tcp: 5000
 ports_description:

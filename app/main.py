@@ -16,9 +16,11 @@ import asyncio
 from datetime import datetime
 from typing import Optional, List, Any
 from contextlib import asynccontextmanager
+from pathlib import Path
+from urllib.parse import urlparse
 
 from fastapi import FastAPI, Query, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi.responses import JSONResponse, HTMLResponse, FileResponse, RedirectResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 import uvicorn
@@ -178,7 +180,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Reolink NVR HA App",
     description="REST API wrapper for Reolink NVR recording search and filtering",
-    version="0.2.2",
+    version="0.2.3",
     lifespan=lifespan,
 )
 
@@ -199,7 +201,10 @@ def _normalize_event_type(event_type: Optional[str]) -> Optional[str]:
 
 def _timeline_entry_to_recent(entry: TimelineEntry) -> dict[str, Any]:
     metadata = entry.metadata or {}
-    clip_url = entry.clip_path or metadata.get("clip_url") or metadata.get("download_url") or metadata.get("stream_url") or metadata.get("live_url")
+    clip_source = entry.clip_path or metadata.get("clip_url") or metadata.get("download_url") or metadata.get("stream_url") or metadata.get("live_url")
+    live_source = metadata.get("live_url")
+    clip_url = f"api/events/{entry.entry_id}/clip" if clip_source else None
+    live_url = f"api/events/{entry.entry_id}/live" if live_source else None
     thumbnail_url = entry.thumbnail_path or metadata.get("thumbnail_url") or metadata.get("snapshot_url")
     return {
         "entry_id": entry.entry_id,
@@ -207,6 +212,9 @@ def _timeline_entry_to_recent(entry: TimelineEntry) -> dict[str, Any]:
         "channel": entry.channel,
         "event_type": entry.event_type,
         "clip_url": clip_url,
+        "raw_clip_url": clip_source,
+        "live_url": live_url,
+        "raw_live_url": live_source,
         "thumbnail_url": thumbnail_url,
         "title": metadata.get("title"),
         "message": metadata.get("message"),
@@ -274,13 +282,61 @@ async def _resolve_clip_for_event(channel: int, event_type: str, timestamp: date
     )
 
 
+def _is_http_url(value: Optional[str]) -> bool:
+    if not value:
+        return False
+    parsed = urlparse(value)
+    return parsed.scheme in ("http", "https")
+
+
+def _entry_media_source(entry: TimelineEntry, kind: str) -> Optional[str]:
+    metadata = entry.metadata or {}
+    if kind == "clip":
+        return (
+            entry.clip_path
+            or metadata.get("clip_url")
+            or metadata.get("download_url")
+            or metadata.get("stream_url")
+            or metadata.get("live_url")
+        )
+    if kind == "live":
+        return metadata.get("live_url") or metadata.get("stream_url") or entry.clip_path
+    return None
+
+
+async def _proxy_http_media(url: str):
+    import aiohttp
+
+    timeout = aiohttp.ClientTimeout(total=None)
+    session = aiohttp.ClientSession(timeout=timeout)
+    upstream = await session.get(url)
+
+    if upstream.status >= 400:
+        text = await upstream.text()
+        await upstream.release()
+        await session.close()
+        raise HTTPException(status_code=upstream.status, detail=text[:500] or f"Upstream media request failed: {upstream.status}")
+
+    content_type = upstream.headers.get("Content-Type", "application/octet-stream")
+
+    async def body_iter():
+        try:
+            async for chunk in upstream.content.iter_chunked(64 * 1024):
+                yield chunk
+        finally:
+            await upstream.release()
+            await session.close()
+
+    return StreamingResponse(body_iter(), media_type=content_type)
+
+
 # ─── Endpoints ────────────────────────────────────────────────────────────────
 
 @app.get("/", summary="API root")
 async def root():
     return {
         "name":    "Reolink NVR HA App",
-        "version": "0.2.2",
+        "version": "0.2.3",
         "status":  "running",
         "docs":    "/docs",
         "health":  "/api/health",
@@ -470,6 +526,7 @@ async def get_timeline(
 
 
 @app.get("/api/events/recent", summary="Get recent player-ready events")
+@app.get("/app/api/events/recent", include_in_schema=False)
 async def get_recent_events(
     limit: int = Query(20, description="Maximum number of events to return"),
     channel: Optional[int] = Query(None, description="Filter by channel"),
@@ -496,6 +553,7 @@ async def get_recent_events(
 
 
 @app.post("/api/events/ingest", summary="Ingest a live event from Home Assistant or another source")
+@app.post("/app/api/events/ingest", include_in_schema=False)
 async def ingest_event(payload: EventIngestRequest):
     _require_nvr()
 
@@ -560,11 +618,56 @@ async def ingest_event(payload: EventIngestRequest):
 
 
 @app.get("/api/timeline/{entry_id}", summary="Get a single timeline entry")
+@app.get("/app/api/timeline/{entry_id}", include_in_schema=False)
 async def get_timeline_entry(entry_id: str):
     entry = timeline_index.get_entry(entry_id)
     if not entry:
         raise HTTPException(status_code=404, detail=f"Timeline entry '{entry_id}' not found")
     return _timeline_entry_to_recent(entry)
+
+
+@app.get("/api/events/{entry_id}/clip", summary="Get playable clip for a timeline event")
+@app.get("/app/api/events/{entry_id}/clip", include_in_schema=False)
+async def get_event_clip(entry_id: str):
+    entry = timeline_index.get_entry(entry_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail=f"Timeline entry '{entry_id}' not found")
+
+    source = _entry_media_source(entry, "clip")
+    if not source:
+        raise HTTPException(status_code=404, detail="No clip source stored for this event")
+
+    if _is_http_url(source):
+        return await _proxy_http_media(source)
+
+    source_path = Path(source)
+    if source_path.exists() and source_path.is_file():
+        return FileResponse(source_path)
+
+    raise HTTPException(
+        status_code=422,
+        detail=f"Clip source is not browser-playable: {source}",
+    )
+
+
+@app.get("/api/events/{entry_id}/live", summary="Open a live view for a timeline event")
+@app.get("/app/api/events/{entry_id}/live", include_in_schema=False)
+async def get_event_live(entry_id: str):
+    entry = timeline_index.get_entry(entry_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail=f"Timeline entry '{entry_id}' not found")
+
+    source = _entry_media_source(entry, "live")
+    if not source:
+        raise HTTPException(status_code=404, detail="No live source stored for this event")
+
+    if _is_http_url(source):
+        return RedirectResponse(source)
+
+    raise HTTPException(
+        status_code=422,
+        detail=f"Live source is not browser-playable: {source}",
+    )
 
 
 def _dashboard_html() -> str:
@@ -574,35 +677,110 @@ def _dashboard_html() -> str:
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Reolink Enhanced API</title>
-  <style>
-    :root { color-scheme: dark; --bg: #0f1115; --panel: #171b22; --line: #263041; --text: #e6edf3; --muted: #9aa7b7; --accent: #5aa9ff; --warn: #ffcb6b; }
+    <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0f1115;
+      --panel: #171b22;
+      --line: #263041;
+      --text: #e6edf3;
+      --muted: #9aa7b7;
+      --accent: #5aa9ff;
+      --warn: #ffcb6b;
+    }
     * { box-sizing: border-box; }
-    body { margin: 0; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); }
-    header { display:flex; align-items:center; justify-content:space-between; padding: 16px 20px; border-bottom: 1px solid var(--line); background: rgba(15,17,21,.96); position: sticky; top: 0; z-index: 5; }
-    header h1 { margin: 0; font-size: 18px; }
-    header .meta { color: var(--muted); font-size: 13px; }
-    main { display: grid; grid-template-columns: 360px 1fr; min-height: calc(100vh - 65px); }
-    aside { border-right: 1px solid var(--line); background: var(--panel); overflow: auto; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    header {
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap: 12px;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(15,17,21,.96);
+      position: sticky;
+      top: 0;
+      z-index: 5;
+    }
+    header h1 { margin: 0; font-size: 18px; line-height: 1.2; }
+    header .meta { color: var(--muted); font-size: 13px; line-height: 1.3; }
+    main {
+      display: grid;
+      grid-template-columns: minmax(320px, 360px) minmax(0, 1fr);
+      min-height: calc(100vh - 65px);
+    }
+    aside {
+      border-right: 1px solid var(--line);
+      background: var(--panel);
+      overflow: auto;
+      -webkit-overflow-scrolling: touch;
+    }
     section.player { display: grid; grid-template-rows: auto 1fr auto; min-height: 0; }
-    .toolbar { display:flex; gap: 8px; padding: 14px 16px; border-bottom: 1px solid var(--line); align-items:center; flex-wrap: wrap; }
-    .chip, button { border: 1px solid var(--line); background: #12161d; color: var(--text); padding: 8px 10px; border-radius: 8px; cursor: pointer; font: inherit; }
+    .toolbar {
+      display:flex;
+      gap: 8px;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      align-items:center;
+      flex-wrap: wrap;
+    }
+    .chip, button {
+      border: 1px solid var(--line);
+      background: #12161d;
+      color: var(--text);
+      min-height: 42px;
+      padding: 10px 12px;
+      border-radius: 10px;
+      cursor: pointer;
+      font: inherit;
+      touch-action: manipulation;
+    }
     .chip.active { border-color: var(--accent); color: var(--accent); }
     .events { list-style:none; margin:0; padding:0; }
-    .event { padding: 14px 16px; border-bottom: 1px solid var(--line); cursor: pointer; }
+    .event {
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--line);
+      cursor: pointer;
+      min-height: 64px;
+    }
     .event:hover { background: rgba(90,169,255,.08); }
     .event.active { background: rgba(90,169,255,.15); }
-    .event .top { display:flex; justify-content:space-between; gap: 12px; font-size: 14px; }
-    .event .time { color: var(--muted); font-size: 12px; margin-top: 4px; }
-    .badge { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; padding: 3px 7px; border-radius: 999px; background: rgba(90,169,255,.16); color: #d5ebff; }
+    .event .top { display:flex; justify-content:space-between; gap: 12px; font-size: 14px; align-items: flex-start; }
+    .event .time { color: var(--muted); font-size: 12px; margin-top: 4px; line-height: 1.3; }
+    .badge { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; padding: 3px 7px; border-radius: 999px; background: rgba(90,169,255,.16); color: #d5ebff; white-space: nowrap; }
     .badge.doorbell { background: rgba(255,203,107,.18); color: #ffe4a0; }
     .player-wrap { padding: 16px; display:grid; gap: 14px; min-height: 0; }
-    video, img.preview { width: 100%; max-height: 64vh; background: #000; border: 1px solid var(--line); border-radius: 8px; object-fit: contain; }
-    .details { display:grid; gap: 6px; padding: 0 16px 16px; color: var(--muted); font-size: 14px; }
+    video, img.preview {
+      width: 100%;
+      max-height: 64vh;
+      background: #000;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      object-fit: contain;
+    }
+    .details { display:grid; gap: 8px; padding: 0 16px 16px; color: var(--muted); font-size: 14px; }
     .details strong { color: var(--text); }
     .empty { padding: 20px; color: var(--muted); }
     .row { display:flex; gap: 8px; flex-wrap: wrap; align-items:center; }
     .muted { color: var(--muted); }
-    @media (max-width: 900px) { main { grid-template-columns: 1fr; } aside { border-right: 0; border-bottom: 1px solid var(--line); } video, img.preview { max-height: 40vh; } }
+    a.chip { display: inline-flex; align-items: center; text-decoration: none; }
+    @media (max-width: 900px) {
+      main { grid-template-columns: 1fr; }
+      aside { border-right: 0; border-bottom: 1px solid var(--line); order: 2; }
+      section.player { order: 1; }
+      header { align-items: flex-start; flex-direction: column; }
+      .toolbar { overflow-x: auto; flex-wrap: nowrap; }
+      video, img.preview { max-height: 34vh; }
+      .player-wrap { padding: 12px; }
+      .details { padding: 0 12px 12px; font-size: 15px; }
+      .event { padding: 16px; }
+    }
   </style>
 </head>
 <body>
@@ -647,6 +825,16 @@ def _dashboard_html() -> str:
     const snapshot = document.getElementById('snapshot');
     const details = document.getElementById('details');
 
+    function apiUrl(path) {
+      return new URL(path, window.location.href).toString();
+    }
+
+    function wsUrl(path) {
+      const url = new URL(path, window.location.href);
+      url.protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      return url.toString();
+    }
+
     function badgeClass(eventType) {
       return eventType === 'DOORBELL' ? 'badge doorbell' : 'badge';
     }
@@ -688,7 +876,7 @@ def _dashboard_html() -> str:
     function setStatus(text) { elStatus.textContent = text; }
 
     async function loadRecent() {
-      const resp = await fetch('/api/events/recent?limit=50');
+      const resp = await fetch(apiUrl('api/events/recent?limit=50'));
       const data = await resp.json();
       state.events = data.events || [];
       if (!state.selected && state.events.length) state.selected = state.events[0].entry_id;
@@ -702,8 +890,9 @@ def _dashboard_html() -> str:
       state.selected = id;
       render();
       const clipUrl = entry.clip_url;
+      const rawClipUrl = entry.raw_clip_url || clipUrl;
       const snapshotUrl = entry.thumbnail_url || entry.metadata?.snapshot_url;
-      if (clipUrl) {
+      if (clipUrl && rawClipUrl && !String(rawClipUrl).startsWith('rtsp://') && !String(rawClipUrl).startsWith('entityId:')) {
         snapshot.hidden = true;
         player.hidden = false;
         player.src = clipUrl;
@@ -723,7 +912,7 @@ def _dashboard_html() -> str:
         <div>${escapeHtml(entry.message || '')}</div>
         <div class="row">
           ${entry.clip_url ? `<a class="chip" href="${entry.clip_url}" target="_blank" rel="noreferrer">Open clip</a>` : ''}
-          ${entry.metadata?.live_url ? `<a class="chip" href="${entry.metadata.live_url}" target="_blank" rel="noreferrer">Open live</a>` : ''}
+          ${entry.live_url ? `<a class="chip" href="${entry.live_url}" target="_blank" rel="noreferrer">Open live</a>` : ''}
         </div>
       `;
     }
@@ -746,8 +935,7 @@ def _dashboard_html() -> str:
     document.getElementById('refresh').addEventListener('click', loadRecent);
 
     function connectSocket() {
-      const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-      const socket = new WebSocket(`${proto}://${location.host}/ws/events`);
+      const socket = new WebSocket(wsUrl('ws/events'));
       state.socket = socket;
       socket.onopen = () => setStatus('Live');
       socket.onclose = () => { setStatus('Reconnecting…'); setTimeout(connectSocket, 1500); };
@@ -774,11 +962,13 @@ def _dashboard_html() -> str:
 
 
 @app.get("/app", response_class=HTMLResponse, summary="Open the event dashboard")
+@app.get("/app/", response_class=HTMLResponse, include_in_schema=False)
 async def app_dashboard():
     return HTMLResponse(_dashboard_html())
 
 
 @app.websocket("/ws/events")
+@app.websocket("/app/ws/events")
 async def ws_events(websocket: WebSocket):
     await websocket.accept()
     ui_clients.append(websocket)
