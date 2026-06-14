@@ -11,6 +11,7 @@ Features:
 """
 
 import os
+import html
 import logging
 import asyncio
 from datetime import datetime, timedelta, timezone
@@ -214,7 +215,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Reolink NVR HA App",
     description="REST API wrapper for Reolink NVR recording search and filtering",
-    version="0.4.3",
+    version="0.4.4",
     lifespan=lifespan,
 )
 
@@ -621,7 +622,7 @@ async def root(request: Request):
         return HTMLResponse(_dashboard_html())
     return {
         "name": "Reolink NVR HA App",
-        "version": "0.4.3",
+        "version": "0.4.4",
         "status": "running",
         "docs": "/docs",
         "health": "/api/health",
@@ -956,6 +957,217 @@ async def get_event_live(entry_id: str):
     )
 
 
+async def _live_mjpeg_stream(channel: int, stream: str = "sub"):
+    if not nvr_host:
+        raise HTTPException(status_code=503, detail="NVR not connected")
+
+    try:
+        rtsp_url = await nvr_host.get_rtsp_stream_source(channel, stream=stream)
+    except Exception as e:
+        logger.error("Failed to resolve live RTSP source for channel %s: %s", channel, e)
+        raise HTTPException(status_code=502, detail=f"Failed to resolve live stream: {e}")
+
+    if not rtsp_url:
+        raise HTTPException(status_code=404, detail=f"No live stream available for channel {channel}")
+
+    async def frame_generator():
+        import asyncio
+
+        proc = await asyncio.create_subprocess_exec(
+            FFMPEG_BIN,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-rtsp_transport",
+            "tcp",
+            "-i",
+            rtsp_url,
+            "-an",
+            "-vf",
+            "scale=-2:720",
+            "-r",
+            "8",
+            "-f",
+            "image2pipe",
+            "-vcodec",
+            "mjpeg",
+            "pipe:1",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        buffer = bytearray()
+        try:
+            while True:
+                chunk = await proc.stdout.read(64 * 1024)
+                if not chunk:
+                    break
+                buffer.extend(chunk)
+                while True:
+                    start = buffer.find(b"\xff\xd8")
+                    end = buffer.find(b"\xff\xd9", start + 2 if start != -1 else 0)
+                    if start == -1 or end == -1 or end <= start:
+                        break
+                    frame = bytes(buffer[start:end + 2])
+                    del buffer[:end + 2]
+                    yield (
+                        b"--frame\r\n"
+                        b"Content-Type: image/jpeg\r\n"
+                        + f"Content-Length: {len(frame)}\r\n\r\n".encode()
+                        + frame
+                        + b"\r\n"
+                    )
+        finally:
+            if proc.returncode is None:
+                proc.terminate()
+                try:
+                    await asyncio.wait_for(proc.wait(), timeout=5)
+                except Exception:
+                    proc.kill()
+                    await proc.wait()
+
+    return StreamingResponse(
+        frame_generator(),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+    )
+
+
+@app.get("/api/live/{channel}/mjpeg", summary="Live MJPEG stream for a camera channel")
+@app.get("/app/api/live/{channel}/mjpeg", include_in_schema=False)
+async def get_live_mjpeg(channel: int, stream: str = Query("sub", description="Stream quality: 'sub' or 'main'")):
+    if channel < 0 or channel >= (nvr_host.num_channels if nvr_host else 0):
+        raise HTTPException(status_code=400, detail="Invalid channel")
+    if stream not in ("sub", "main"):
+        raise HTTPException(status_code=400, detail="stream must be 'sub' or 'main'")
+    return await _live_mjpeg_stream(channel, stream=stream)
+
+
+def _live_dashboard_html(channel: int = 8, event_type: Optional[str] = None) -> str:
+    event_label = html.escape(event_type) if event_type else "Live"
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Reolink Live</title>
+  <style>
+    :root {{
+      color-scheme: dark;
+      --bg: #0f1115;
+      --panel: #171b22;
+      --line: #263041;
+      --text: #e6edf3;
+      --muted: #9aa7b7;
+      --accent: #5aa9ff;
+    }}
+    * {{ box-sizing: border-box; }}
+    html, body {{ height: 100%; }}
+    body {{
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }}
+    main {{
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+      padding: 0.75rem;
+    }}
+    .topbar {{
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      padding: 0.75rem 0;
+    }}
+    .title {{
+      display: flex;
+      flex-direction: column;
+      gap: 0.2rem;
+      min-width: 0;
+    }}
+    .title strong {{
+      font-size: 1.1rem;
+      line-height: 1.2;
+    }}
+    .title span {{
+      color: var(--muted);
+      font-size: 0.92rem;
+    }}
+    .chip {{
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 0.4rem 0.7rem;
+      color: var(--text);
+      text-decoration: none;
+      background: rgba(255,255,255,0.03);
+      white-space: nowrap;
+    }}
+    .viewer {{
+      flex: 1;
+      min-height: 0;
+      border: 1px solid var(--line);
+      border-radius: 0.75rem;
+      overflow: hidden;
+      background: #000;
+    }}
+    .viewer img {{
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      display: block;
+    }}
+    .meta {{
+      display: grid;
+      gap: 0.35rem;
+      color: var(--muted);
+      font-size: 0.95rem;
+    }}
+    .actions {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+    }}
+  </style>
+</head>
+<body>
+  <main>
+    <div class="topbar">
+      <div class="title">
+        <strong>Front Door Live</strong>
+        <span>{event_label} view • Channel {channel}</span>
+      </div>
+      <a class="chip" href="..">Back to events</a>
+    </div>
+    <div class="viewer">
+      <img src="api/live/{channel}/mjpeg" alt="Live stream for channel {channel}">
+    </div>
+    <div class="meta">
+      <div>Live stream is served inside the app.</div>
+      <div>If the stream is unavailable, reload after a few seconds.</div>
+    </div>
+    <div class="actions">
+      <a class="chip" href="..">Events</a>
+      <a class="chip" href="api/live/{channel}/mjpeg?stream=main" target="_blank" rel="noreferrer">Open main stream</a>
+    </div>
+  </main>
+</body>
+</html>"""
+
+
+@app.get("/app/live", response_class=HTMLResponse, summary="Open the live camera page")
+@app.get("/app/live/", response_class=HTMLResponse, include_in_schema=False)
+async def app_live(channel: int = Query(ROLLING_BUFFER_CHANNEL, description="Camera channel number"), event_type: Optional[str] = Query(None)):
+    if channel < 0 or (nvr_host and channel >= nvr_host.num_channels):
+        raise HTTPException(status_code=400, detail="Invalid channel")
+    return HTMLResponse(_live_dashboard_html(channel=channel, event_type=event_type))
+
+
 def _dashboard_html() -> str:
     return """<!doctype html>
 <html lang="en">
@@ -1104,6 +1316,13 @@ def _dashboard_html() -> str:
   </main>
   <script>
     const state = { events: [], filter: 'ALL', selected: null, socket: null };
+    const deepLink = new URLSearchParams(window.location.search);
+    const requestedEntryId = deepLink.get('event_id') || deepLink.get('entry_id');
+    const requestedEventType = (() => {
+      const raw = (deepLink.get('event_type') || '').trim().toUpperCase();
+      return ['PERSON', 'DOORBELL'].includes(raw) ? raw : null;
+    })();
+    if (requestedEventType) state.filter = requestedEventType;
     const elEvents = document.getElementById('events');
     const elCount = document.getElementById('count');
     const elStatus = document.getElementById('status');
@@ -1165,7 +1384,11 @@ def _dashboard_html() -> str:
       const resp = await fetch(apiUrl('api/events/recent?limit=50'));
       const data = await resp.json();
       state.events = data.events || [];
-      if (!state.selected && state.events.length) state.selected = state.events[0].entry_id;
+      if (requestedEntryId && state.events.find(e => e.entry_id === requestedEntryId)) {
+        state.selected = requestedEntryId;
+      } else if (!state.selected && state.events.length) {
+        state.selected = state.events[0].entry_id;
+      }
       render();
       if (state.selected) selectEvent(state.selected, false);
     }
