@@ -72,5 +72,26 @@ Use placeholders for your remote Home Assistant URL. Do not hard-code a private 
 
 This blueprint also handles the `UNLOCK_DOOR` notification action, so you do not need a separate unlock automation when you use it.
 
-The app also registers its own NVR webhook on startup when the NVR supports it, so the timeline stays in sync without a Home Assistant relay.
-If your LAN uses an unusual network layout, set the add-on's `webhook_base_url` option so the NVR can reach the app directly.
+To keep the app timeline in sync, add this one `rest_command` block to Home Assistant `configuration.yaml` once:
+
+```yaml
+rest_command:
+  reolink_ingest_event:
+    url: "{{ app_url }}/api/events/ingest"
+    method: POST
+    content_type: "application/json"
+    payload: >-
+      {
+        "event_type": "{{ event_type }}",
+        "channel": {{ channel }},
+        "timestamp": "{{ timestamp }}",
+        "camera_name": "{{ camera_name }}",
+        "snapshot_url": "{{ snapshot_url }}",
+        "live_url": "{{ live_url }}",
+        "title": "{{ title }}",
+        "message": "{{ message }}",
+        "source": "home_assistant"
+      }
+```
+
+The blueprint passes `app_url` using the same remote app base URL you already set for the notification links.

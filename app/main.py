@@ -14,7 +14,6 @@ import os
 import html
 import logging
 import asyncio
-import socket
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Any
@@ -59,10 +58,6 @@ LOCAL_CLIP_SECONDS = max(
 FFMPEG_BIN = os.getenv("FFMPEG_BIN", "ffmpeg")
 ROLLING_BUFFER_CHANNEL = int(os.getenv("ROLLING_BUFFER_CHANNEL", "8"))
 ROLLING_SEGMENT_SECONDS = int(os.getenv("ROLLING_SEGMENT_SECONDS", "2"))
-WEBHOOK_ENABLED = os.getenv("WEBHOOK_ENABLED", "true").lower() == "true"
-WEBHOOK_CHANNEL = int(os.getenv("WEBHOOK_CHANNEL", str(ROLLING_BUFFER_CHANNEL)))
-WEBHOOK_PATH = os.getenv("WEBHOOK_PATH", "/api/webhook/reolink")
-WEBHOOK_BASE_URL = os.getenv("WEBHOOK_BASE_URL")
 
 logging.basicConfig(
     level=logging.DEBUG if DEBUG else logging.INFO,
@@ -158,62 +153,6 @@ class RecentEvent(BaseModel):
 
 # ─── Lifespan (startup / shutdown) ───────────────────────────────────────────
 
-def _resolve_local_webhook_base_url() -> Optional[str]:
-    if WEBHOOK_BASE_URL:
-        return WEBHOOK_BASE_URL.rstrip("/")
-
-    candidates: list[str] = []
-    try:
-        candidates.append(socket.gethostbyname(socket.gethostname()))
-    except Exception:
-        pass
-
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-            sock.connect(("8.8.8.8", 80))
-            candidates.append(sock.getsockname()[0])
-    except Exception:
-        pass
-
-    for candidate in candidates:
-        if candidate and candidate != "127.0.0.1" and not candidate.startswith("0."):
-            return f"http://{candidate}:5000"
-    return None
-
-
-async def _register_webhook() -> None:
-    if not nvr_host or not WEBHOOK_ENABLED:
-        return
-
-    base_url = _resolve_local_webhook_base_url()
-    if not base_url:
-        logger.warning("Could not resolve a local webhook base URL; skipping NVR webhook registration")
-        return
-
-    webhook_url = f"{base_url}{WEBHOOK_PATH}"
-    try:
-        await nvr_host.webhook_add(WEBHOOK_CHANNEL, webhook_url)
-        logger.info("Registered NVR webhook for channel %s at %s", WEBHOOK_CHANNEL, webhook_url)
-    except Exception as e:
-        logger.error("Failed to register NVR webhook at %s: %s", webhook_url, e)
-
-
-async def _remove_webhook() -> None:
-    if not nvr_host or not WEBHOOK_ENABLED:
-        return
-
-    base_url = _resolve_local_webhook_base_url()
-    if not base_url:
-        return
-
-    webhook_url = f"{base_url}{WEBHOOK_PATH}"
-    try:
-        await nvr_host.webhook_remove(WEBHOOK_CHANNEL, webhook_url)
-        logger.info("Removed NVR webhook for channel %s at %s", WEBHOOK_CHANNEL, webhook_url)
-    except Exception as e:
-        logger.debug("Could not remove NVR webhook at %s: %s", webhook_url, e)
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global nvr_host, timeline_index, rolling_buffer
@@ -242,8 +181,6 @@ async def lifespan(app: FastAPI):
     timeline_index = TimelineIndex(index_file=f"{index_path}/timeline.json")
     logger.info("Timeline index initialized at %s/timeline.json", index_path)
 
-    await _register_webhook()
-
     if LOCAL_CLIP_ENABLED and nvr_host:
         try:
             rolling_buffer = RollingSegmentBuffer(
@@ -270,10 +207,6 @@ async def lifespan(app: FastAPI):
             logger.error("Error stopping rolling buffer: %s", e)
     if nvr_host:
         try:
-            await _remove_webhook()
-        except Exception as e:
-            logger.error("Error removing webhook: %s", e)
-        try:
             await nvr_host.logout()
         except Exception as e:
             logger.error("Error during logout: %s", e)
@@ -283,7 +216,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Reolink NVR HA App",
     description="REST API wrapper for Reolink NVR recording search and filtering",
-    version="0.4.5",
+    version="0.4.7",
     lifespan=lifespan,
 )
 
@@ -781,7 +714,7 @@ async def root(request: Request):
         return HTMLResponse(_dashboard_html())
     return {
         "name": "Reolink NVR HA App",
-        "version": "0.4.5",
+        "version": "0.4.7",
         "status": "running",
         "docs": "/docs",
         "health": "/api/health",

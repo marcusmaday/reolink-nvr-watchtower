@@ -98,7 +98,30 @@ https://raw.githubusercontent.com/marcusmaday/reolink-nvr-ha-app/main/blueprints
 
 That blueprint lets you choose the sensors, lock, phone notification services, and the remote app URL from the Home Assistant UI.
 It also handles the `UNLOCK_DOOR` action from the notification button, so it replaces the separate unlock automation.
-The app now registers its own NVR webhook on startup when supported, so new events appear in the app without a Home Assistant relay.
+
+Add this one `rest_command` block to Home Assistant `configuration.yaml` so the blueprint can relay the event into the app timeline:
+
+```yaml
+rest_command:
+  reolink_ingest_event:
+    url: "{{ app_url }}/api/events/ingest"
+    method: POST
+    content_type: "application/json"
+    payload: >-
+      {
+        "event_type": "{{ event_type }}",
+        "channel": {{ channel }},
+        "timestamp": "{{ timestamp }}",
+        "camera_name": "{{ camera_name }}",
+        "snapshot_url": "{{ snapshot_url }}",
+        "live_url": "{{ live_url }}",
+        "title": "{{ title }}",
+        "message": "{{ message }}",
+        "source": "home_assistant"
+      }
+```
+
+The blueprint supplies `app_url` from the same remote app base URL you already entered for notification links.
 
 Use placeholders in shared examples instead of a real remote-access URL:
 

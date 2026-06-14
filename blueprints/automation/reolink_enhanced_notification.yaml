@@ -1,8 +1,8 @@
 blueprint:
   name: Reolink Enhanced Notification Actions
   description: >
-    Send thumbnail-based PERSON and DOORBELL notifications that open the event
-    clip in the app and provide either live view or front-door unlock actions.
+    Send thumbnail-based PERSON and DOORBELL notifications, relay events into
+    the app timeline, and provide either live view or front-door unlock actions.
   domain: automation
   input:
     doorbell_sensor:
@@ -23,6 +23,12 @@ blueprint:
       selector:
         entity:
           domain: camera
+    camera_name:
+      name: Camera name
+      description: Friendly name to show in the app timeline.
+      default: Front Door
+      selector:
+        text: {}
     front_door_lock:
       name: Front door lock
       description: Lock entity used for the doorbell unlock action.
@@ -88,7 +94,9 @@ actions:
   - variables:
       channel: !input camera_channel
       base_url: !input app_base_url
+      cam_name: !input camera_name
       event_type: "{{ 'DOORBELL' if trigger.id == 'doorbell' else 'PERSON' }}"
+      event_timestamp: "{{ now().isoformat() }}"
       snapshot_file: "/config/www/tmp/doorbell_snapshot_{{ trigger.id }}.jpg"
       snapshot_url: "/local/tmp/doorbell_snapshot_{{ trigger.id }}.jpg"
       app_event_url: "{{ base_url }}?channel={{ channel }}&event_type={{ event_type }}"
@@ -109,6 +117,24 @@ actions:
               filename: "{{ snapshot_file }}"
 
   - delay: "00:00:01"
+
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.id in ['doorbell', 'person'] }}"
+        sequence:
+          - action: rest_command.reolink_ingest_event
+            data:
+              app_url: "{{ base_url }}"
+              event_type: "{{ event_type }}"
+              channel: "{{ channel }}"
+              timestamp: "{{ event_timestamp }}"
+              camera_name: "{{ cam_name }}"
+              snapshot_url: "{{ snapshot_url }}"
+              live_url: "{{ app_live_url }}"
+              title: "{{ notif_title }}"
+              message: "{{ msg }}"
+              source: "home_assistant"
 
   - choose:
       - conditions:

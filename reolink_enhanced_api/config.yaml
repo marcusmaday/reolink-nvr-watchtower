@@ -1,5 +1,5 @@
 name: "Reolink Enhanced API"
-version: "0.4.5"
+version: "0.4.7"
 slug: "reolink_enhanced_api"
 description: "REST + WebSocket API wrapper for Reolink NVR with event timeline and clip generation"
 url: "https://github.com/marcusmaday/reolink-nvr-ha-app"
@@ -33,10 +33,6 @@ options:
   retention_days: 7
   max_storage_mb: 5000
   debug: false
-  webhook_enabled: true
-  webhook_channel: 8
-  webhook_base_url: ""
-  webhook_path: "/api/webhook/reolink"
 schema:
   nvr_host: "str"
   nvr_port: "int(1,65535)"
@@ -50,8 +46,4 @@ schema:
   retention_days: "int(1,90)"
   max_storage_mb: "int(100,20000)"
   debug: "bool"
-  webhook_enabled: "bool"
-  webhook_channel: "int(0,64)"
-  webhook_base_url: "str"
-  webhook_path: "str"
 homeassistant: "2024.1.0"
