@@ -214,7 +214,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Reolink NVR HA App",
     description="REST API wrapper for Reolink NVR recording search and filtering",
-    version="0.4.2",
+    version="0.4.3",
     lifespan=lifespan,
 )
 
@@ -459,6 +459,86 @@ async def _generate_buffered_event_clip(entry: TimelineEntry) -> None:
         await _broadcast_recent_event(failed_entry)
         logger.error("Failed to generate buffered clip for %s: %s", entry.entry_id, e)
 
+        # Fall back to a direct RTSP capture so a clip still exists while the
+        # ring buffer warms up or if segment stitching misses the event window.
+        await _capture_direct_event_clip(entry, clip_path)
+
+
+async def _capture_direct_event_clip(entry: TimelineEntry, clip_path: Path) -> None:
+    if not nvr_host:
+        return
+
+    try:
+        rtsp_url = await nvr_host.get_rtsp_stream_source(entry.channel, stream="sub")
+    except Exception as e:
+        logger.error("Direct RTSP fallback failed for %s: %s", entry.entry_id, e)
+        return
+
+    if not rtsp_url:
+        logger.error("Direct RTSP fallback has no stream for %s", entry.entry_id)
+        return
+
+    clip_seconds = max(LOCAL_CLIP_SECONDS, 1)
+    try:
+        if clip_path.exists():
+            clip_path.unlink()
+
+        cmd = [
+            FFMPEG_BIN,
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-rtsp_transport",
+            "tcp",
+            "-i",
+            rtsp_url,
+            "-t",
+            str(clip_seconds),
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "28",
+            "-pix_fmt",
+            "yuv420p",
+            "-an",
+            "-movflags",
+            "+faststart",
+            str(clip_path),
+        ]
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await proc.communicate()
+        if proc.returncode != 0:
+            raise RuntimeError((stderr or b"").decode("utf-8", "ignore").strip() or f"ffmpeg exited with {proc.returncode}")
+        if not clip_path.exists() or clip_path.stat().st_size == 0:
+            raise RuntimeError("ffmpeg completed but clip file was not created")
+
+        ready_metadata = dict(entry.metadata or {})
+        ready_metadata["clip_status"] = "ready"
+        ready_metadata["clip_source"] = "direct_rtsp"
+        ready_metadata["clip_file"] = str(clip_path)
+        ready_metadata["duration_seconds"] = clip_seconds
+        ready_entry = TimelineEntry(
+            entry_id=entry.entry_id,
+            timestamp=entry.timestamp,
+            channel=entry.channel,
+            event_type=entry.event_type,
+            clip_path=str(clip_path),
+            thumbnail_path=entry.thumbnail_path,
+            metadata=ready_metadata,
+        )
+        timeline_index.upsert_entry(ready_entry)
+        await _broadcast_recent_event(ready_entry)
+        logger.info("Direct RTSP fallback clip generated for %s: %s", entry.entry_id, clip_path)
+    except Exception as e:
+        logger.error("Direct RTSP fallback failed for %s: %s", entry.entry_id, e)
+
 
 def _schedule_clip_generation(entry: TimelineEntry) -> None:
     if not LOCAL_CLIP_ENABLED:
@@ -541,7 +621,7 @@ async def root(request: Request):
         return HTMLResponse(_dashboard_html())
     return {
         "name": "Reolink NVR HA App",
-        "version": "0.4.2",
+        "version": "0.4.3",
         "status": "running",
         "docs": "/docs",
         "health": "/api/health",

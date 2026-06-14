@@ -8,7 +8,7 @@ import asyncio
 import logging
 import re
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -152,6 +152,11 @@ class RollingSegmentBuffer:
     async def build_clip(self, start_time: datetime, end_time: datetime, output_path: str) -> Optional[str]:
         if end_time <= start_time:
             return None
+
+        if start_time.tzinfo is not None:
+            start_time = start_time.astimezone(timezone.utc).replace(tzinfo=None)
+        if end_time.tzinfo is not None:
+            end_time = end_time.astimezone(timezone.utc).replace(tzinfo=None)
 
         self._prune_old_segments()
         segments = self._load_segments()
