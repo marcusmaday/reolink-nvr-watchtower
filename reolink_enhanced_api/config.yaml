@@ -1,5 +1,5 @@
 name: "Reolink Enhanced API"
-version: "0.4.7"
+version: "0.4.8"
 slug: "reolink_enhanced_api"
 description: "REST + WebSocket API wrapper for Reolink NVR with event timeline and clip generation"
 url: "https://github.com/marcusmaday/reolink-nvr-ha-app"
@@ -21,6 +21,8 @@ ports_description:
   5000/tcp: "API server port"
 image: "ghcr.io/marcusmaday/reolink-nvr-enhanced-{arch}"
 options:
+  api_port: 5000
+  api_host: "0.0.0.0"
   nvr_host: "192.168.1.100"
   nvr_port: 80
   nvr_username: "admin"
@@ -30,10 +32,15 @@ options:
   buffer_size_seconds: 60
   clip_duration_before: 5
   clip_duration_after: 5
+  clip_quality: "medium"
   retention_days: 7
   max_storage_mb: 5000
+  external_storage_path: ""
+  allow_cors: false
   debug: false
 schema:
+  api_port: "int(1,65535)"
+  api_host: "str"
   nvr_host: "str"
   nvr_port: "int(1,65535)"
   nvr_username: "str"
@@ -43,7 +50,10 @@ schema:
   buffer_size_seconds: "int(10,300)"
   clip_duration_before: "int(1,30)"
   clip_duration_after: "int(1,30)"
+  clip_quality: "str"
   retention_days: "int(1,90)"
   max_storage_mb: "int(100,20000)"
+  external_storage_path: "str"
+  allow_cors: "bool"
   debug: "bool"
 homeassistant: "2024.1.0"

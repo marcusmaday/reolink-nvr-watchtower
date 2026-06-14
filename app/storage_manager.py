@@ -51,7 +51,11 @@ class StorageManager:
         """Stop storage maintenance."""
         self._running = False
         if self._maintenance_task:
-            await self._maintenance_task
+            self._maintenance_task.cancel()
+            try:
+                await self._maintenance_task
+            except asyncio.CancelledError:
+                pass
         logger.info("Storage manager stopped")
 
     async def _maintenance_loop(self):

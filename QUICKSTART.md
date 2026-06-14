@@ -7,12 +7,26 @@ Use this path if you want the service running quickly and do not need the full b
 In Home Assistant add-on settings or your local `.env`, set:
 
 ```bash
+API_PORT=5000
+API_HOST=0.0.0.0
 NVR_HOST=192.168.50.42
 NVR_PORT=80
 NVR_USERNAME=admin
 NVR_PASSWORD=your_password
 NVR_SSL=false
+BUFFER_ENABLED=true
+BUFFER_SIZE_SECONDS=60
+CLIP_DURATION_BEFORE=5
+CLIP_DURATION_AFTER=5
+CLIP_QUALITY=medium
+RETENTION_DAYS=7
+MAX_STORAGE_MB=5000
+EXTERNAL_STORAGE_PATH=
+ALLOW_CORS=false
 ```
+
+If you change the add-on `api_port`, keep the add-on port mapping aligned with that value and use the same port in the relay URL and in any local client URLs.
+`CLIP_QUALITY` selects the RTSP stream for generated clips. `high` uses the main stream; all other values use the sub stream.
 
 ## 2. Add The Add-On Repository
 
@@ -81,7 +95,7 @@ Add this one `rest_command` block to `configuration.yaml` so the blueprint can r
 ```yaml
 rest_command:
   reolink_ingest_event:
-    url: "{{ app_url }}/api/events/ingest"
+    url: "http://HA_GATEWAY_IP:APP_PORT/api/events/ingest"
     method: POST
     content_type: "application/json"
     payload: >-
@@ -98,7 +112,13 @@ rest_command:
       }
 ```
 
-The blueprint supplies `app_url` from the same remote app base URL you already entered for notification links.
+`APP_PORT` is the app port configured in the add-on options and defaults to `5000`. If you do not know `HA_GATEWAY_IP`, open the add-on shell and run:
+
+```bash
+ip route | awk '/default/ {print $3}'
+```
+
+Use that IP with the configured app port. It is an internal Home Assistant network address, not your public remote-access URL.
 
 If you are writing a manual example, keep the real remote URL out of shared examples and use a placeholder:
 

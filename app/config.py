@@ -99,14 +99,16 @@ def get_config() -> AppConfig:
 
     # ─── Storage Configuration ───
     # If HOME_ASSISTANT_DATA_DIR is set (when running in HA add-on),
-    # use that; otherwise use /tmp or local directory
+    # use that; otherwise use /tmp or local directory.
+    # External storage, when configured, becomes the base directory.
     ha_data_dir = os.getenv("HOME_ASSISTANT_DATA_DIR", "/tmp")
-    clips_dir = os.path.join(ha_data_dir, "reolink_clips")
-    index_file = os.path.join(ha_data_dir, "reolink_timeline.json")
+    external_storage = os.getenv("EXTERNAL_STORAGE_PATH", None) or None
+    base_dir = external_storage or ha_data_dir
+    clips_dir = os.path.join(base_dir, "reolink_clips")
+    index_file = os.path.join(base_dir, "reolink_timeline.json")
 
     retention_days = int(os.getenv("RETENTION_DAYS", "7"))
     max_storage_mb = int(os.getenv("MAX_STORAGE_MB", "5000"))
-    external_storage = os.getenv("EXTERNAL_STORAGE_PATH", None)
 
     storage_config = StorageConfig(
         clips_directory=clips_dir,
@@ -149,7 +151,23 @@ def _log_config(config: AppConfig):
     logger.info("=== Reolink Enhanced API Configuration ===")
     logger.info("NVR: %s:%d (SSL: %s)", config.nvr.host, config.nvr.port, config.nvr.use_https)
     logger.info("Username: %s", config.nvr.username)
-    logger.info("Video Buffer: enabled=%s, size=%ds", config.video_buffer.enabled, config.video_buffer.buffer_size_seconds)
+    logger.info(
+        "Video Buffer: enabled=%s, size=%ds, clip_quality=%s",
+        config.video_buffer.enabled,
+        config.video_buffer.buffer_size_seconds,
+        config.video_buffer.clip_quality,
+    )
     logger.info("Clips Directory: %s", config.storage.clips_directory)
-    logger.info("Retention: %d days, max %d MB", config.storage.retention_days, config.storage.max_storage_mb)
-    logger.info("API: %s:%d (debug=%s)", config.api.host, config.api.port, config.api.debug)
+    logger.info(
+        "Retention: %d days, max %d MB, external_storage=%s",
+        config.storage.retention_days,
+        config.storage.max_storage_mb,
+        config.storage.external_storage_path or "none",
+    )
+    logger.info(
+        "API: %s:%d (debug=%s, allow_cors=%s)",
+        config.api.host,
+        config.api.port,
+        config.api.debug,
+        config.api.allow_cors,
+    )

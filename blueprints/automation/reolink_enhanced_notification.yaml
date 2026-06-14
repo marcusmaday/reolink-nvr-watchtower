@@ -123,12 +123,11 @@ actions:
           - condition: template
             value_template: "{{ trigger.id in ['doorbell', 'person'] }}"
         sequence:
-          - action: rest_command.reolink_ingest_event
-            data:
-              app_url: "{{ base_url }}"
-              event_type: "{{ event_type }}"
-              channel: "{{ channel }}"
-              timestamp: "{{ event_timestamp }}"
+  - action: rest_command.reolink_ingest_event
+    data:
+      event_type: "{{ event_type }}"
+      channel: "{{ channel }}"
+      timestamp: "{{ event_timestamp }}"
               camera_name: "{{ cam_name }}"
               snapshot_url: "{{ snapshot_url }}"
               live_url: "{{ app_live_url }}"

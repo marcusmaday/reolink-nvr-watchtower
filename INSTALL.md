@@ -18,6 +18,8 @@ https://github.com/marcusmaday/reolink-nvr-ha-app
 Recommended starting values:
 
 ```yaml
+api_port: 5000
+api_host: 0.0.0.0
 nvr_host: 192.168.50.42
 nvr_port: 80
 nvr_username: admin
@@ -27,10 +29,16 @@ buffer_enabled: true
 buffer_size_seconds: 60
 clip_duration_before: 5
 clip_duration_after: 5
+clip_quality: medium
 retention_days: 7
 max_storage_mb: 5000
+external_storage_path: ""
+allow_cors: false
 debug: false
 ```
+
+The `api_port` option controls the app's listening port in the add-on. If you change it, keep the add-on port mapping aligned and use the same port in the relay URL.
+`clip_quality` controls which RTSP stream is used for generated clips. `high` uses the main stream; the other values use the sub stream.
 
 ## Local Docker
 
@@ -77,7 +85,7 @@ To keep the app timeline in sync, add this one `rest_command` block to Home Assi
 ```yaml
 rest_command:
   reolink_ingest_event:
-    url: "{{ app_url }}/api/events/ingest"
+    url: "http://HA_GATEWAY_IP:APP_PORT/api/events/ingest"
     method: POST
     content_type: "application/json"
     payload: >-
@@ -94,4 +102,10 @@ rest_command:
       }
 ```
 
-The blueprint passes `app_url` using the same remote app base URL you already set for the notification links.
+`APP_PORT` is the app port configured in the add-on options and defaults to `5000`. If you do not know `HA_GATEWAY_IP`, open the add-on shell and run:
+
+```bash
+ip route | awk '/default/ {print $3}'
+```
+
+Use that IP with the configured app port. This is an internal Home Assistant network address used by the add-on, not your public remote-access URL.

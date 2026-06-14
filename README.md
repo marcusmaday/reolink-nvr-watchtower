@@ -71,6 +71,8 @@ curl http://localhost:5000/api/channels
 
 Common settings:
 
+- `API_PORT`
+- `API_HOST`
 - `NVR_HOST`
 - `NVR_PORT`
 - `NVR_USERNAME`
@@ -80,11 +82,18 @@ Common settings:
 - `BUFFER_SIZE_SECONDS`
 - `CLIP_DURATION_BEFORE`
 - `CLIP_DURATION_AFTER`
+- `CLIP_QUALITY`
 - `RETENTION_DAYS`
 - `MAX_STORAGE_MB`
+- `EXTERNAL_STORAGE_PATH`
+- `ALLOW_CORS`
 - `DEBUG`
 
 For Home Assistant app installs, these are supplied through the app options UI.
+`API_PORT` controls the app's listening port. In the Home Assistant add-on, keep it aligned with the add-on's declared port mapping.
+`CLIP_QUALITY` chooses which RTSP stream is used for generated clips: `high` uses the main stream, everything else uses the sub stream.
+`BUFFER_SIZE_SECONDS` controls how much rolling pre-roll the app keeps on disk for the front door camera.
+`RETENTION_DAYS` and `MAX_STORAGE_MB` control clip cleanup. `EXTERNAL_STORAGE_PATH` lets you move clip and timeline data off the default add-on data directory.
 
 ## Home Assistant Notifications
 
@@ -104,7 +113,7 @@ Add this one `rest_command` block to Home Assistant `configuration.yaml` so the 
 ```yaml
 rest_command:
   reolink_ingest_event:
-    url: "{{ app_url }}/api/events/ingest"
+    url: "http://HA_GATEWAY_IP:APP_PORT/api/events/ingest"
     method: POST
     content_type: "application/json"
     payload: >-
@@ -121,7 +130,13 @@ rest_command:
       }
 ```
 
-The blueprint supplies `app_url` from the same remote app base URL you already entered for notification links.
+`HA_GATEWAY_IP` is the internal Home Assistant host address visible from the add-on container. `APP_PORT` is the app port configured in the add-on options; it defaults to `5000`. If you do not know the gateway IP, open the add-on shell and run:
+
+```bash
+ip route | awk '/default/ {print $3}'
+```
+
+Use that IP with the configured app port for the relay URL. This is an internal container-to-container address, not your public URL.
 
 Use placeholders in shared examples instead of a real remote-access URL:
 

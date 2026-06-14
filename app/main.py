@@ -41,29 +41,48 @@ from storage_manager import StorageManager
 from rolling_buffer import RollingSegmentBuffer
 from reolink_search import search_recordings, get_channels_info, EVENT_TYPE_MAP
 
+logging.basicConfig(
+    level=logging.DEBUG if os.getenv("DEBUG", "false").lower() == "true" else logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+logger = logging.getLogger(__name__)
+
+APP_CONFIG: AppConfig = get_config()
+if APP_CONFIG.api.debug:
+    logging.getLogger().setLevel(logging.DEBUG)
+    logger.setLevel(logging.DEBUG)
+
 # ─── Config (from env / HA add-on options) ────────────────────────────────────
-NVR_HOST     = os.getenv("NVR_HOST",     "192.168.1.100")
-NVR_PORT     = int(os.getenv("NVR_PORT", "80"))
-NVR_USERNAME = os.getenv("NVR_USERNAME", "admin")
-NVR_PASSWORD = os.getenv("NVR_PASSWORD", "password")
-NVR_SSL      = os.getenv("NVR_SSL",  "false").lower() == "true"
-DEBUG        = os.getenv("DEBUG",    "false").lower() == "true"
-API_PORT     = int(os.getenv("API_PORT", "5000"))
-LOCAL_CLIP_ENABLED = os.getenv("BUFFER_ENABLED", "true").lower() == "true"
+NVR_HOST = APP_CONFIG.nvr.host
+NVR_PORT = APP_CONFIG.nvr.port
+NVR_USERNAME = APP_CONFIG.nvr.username
+NVR_PASSWORD = APP_CONFIG.nvr.password
+NVR_SSL = APP_CONFIG.nvr.use_https
+DEBUG = APP_CONFIG.api.debug
+API_PORT = APP_CONFIG.api.port
+API_HOST = APP_CONFIG.api.host
+ALLOW_CORS = APP_CONFIG.api.allow_cors
+LOCAL_CLIP_ENABLED = APP_CONFIG.video_buffer.enabled
+CLIP_QUALITY = APP_CONFIG.video_buffer.clip_quality.lower()
 LOCAL_CLIP_SECONDS = max(
-    int(os.getenv("CLIP_DURATION_BEFORE", "5")) + int(os.getenv("CLIP_DURATION_AFTER", "5")),
+    APP_CONFIG.video_buffer.clip_duration_before + APP_CONFIG.video_buffer.clip_duration_after,
     int(os.getenv("LOCAL_CLIP_SECONDS", "12")),
     1,
+)
+BUFFER_RETENTION_SECONDS = max(
+    APP_CONFIG.video_buffer.buffer_size_seconds,
+    LOCAL_CLIP_SECONDS + 20,
 )
 FFMPEG_BIN = os.getenv("FFMPEG_BIN", "ffmpeg")
 ROLLING_BUFFER_CHANNEL = int(os.getenv("ROLLING_BUFFER_CHANNEL", "8"))
 ROLLING_SEGMENT_SECONDS = int(os.getenv("ROLLING_SEGMENT_SECONDS", "2"))
-
-logging.basicConfig(
-    level=logging.DEBUG if DEBUG else logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-)
-logger = logging.getLogger(__name__)
+CLIP_DURATION_BEFORE = APP_CONFIG.video_buffer.clip_duration_before
+CLIP_DURATION_AFTER = APP_CONFIG.video_buffer.clip_duration_after
+CLIPS_DIRECTORY = Path(APP_CONFIG.storage.clips_directory)
+INDEX_FILE = APP_CONFIG.storage.index_file
+RETENTION_DAYS = APP_CONFIG.storage.retention_days
+MAX_STORAGE_MB = APP_CONFIG.storage.max_storage_mb
+EXTERNAL_STORAGE_PATH = APP_CONFIG.storage.external_storage_path
 
 # Global NVR host instance
 nvr_host: Optional[Host] = None
@@ -71,6 +90,7 @@ timeline_index: Optional[TimelineIndex] = None
 ui_clients: list[WebSocket] = []
 clip_tasks: set[asyncio.Task] = set()
 rolling_buffer: Optional[RollingSegmentBuffer] = None
+storage_manager: Optional[StorageManager] = None
 
 
 # ─── Pydantic models ──────────────────────────────────────────────────────────
@@ -155,7 +175,7 @@ class RecentEvent(BaseModel):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global nvr_host, timeline_index, rolling_buffer
+    global nvr_host, timeline_index, rolling_buffer, storage_manager
 
     logger.info("Starting Reolink NVR HA App...")
     logger.info("Connecting to NVR at %s:%s", NVR_HOST, NVR_PORT)
@@ -177,20 +197,32 @@ async def lifespan(app: FastAPI):
         logger.error("Unexpected error during startup: %s", e)
         nvr_host = None
 
-    index_path = os.getenv("HOME_ASSISTANT_DATA_DIR", "/data/reolink")
-    timeline_index = TimelineIndex(index_file=f"{index_path}/timeline.json")
-    logger.info("Timeline index initialized at %s/timeline.json", index_path)
+    timeline_index = TimelineIndex(index_file=INDEX_FILE)
+    logger.info("Timeline index initialized at %s", INDEX_FILE)
+
+    storage_manager = StorageManager(
+        clips_directory=str(CLIPS_DIRECTORY),
+        timeline_index=timeline_index,
+        retention_days=RETENTION_DAYS,
+        max_storage_mb=MAX_STORAGE_MB,
+        external_storage_path=EXTERNAL_STORAGE_PATH,
+    )
+    try:
+        await storage_manager.start()
+    except Exception as e:
+        logger.error("Failed to start storage manager: %s", e)
+        storage_manager = None
 
     if LOCAL_CLIP_ENABLED and nvr_host:
         try:
             rolling_buffer = RollingSegmentBuffer(
                 nvr_client=nvr_host,
                 channel=ROLLING_BUFFER_CHANNEL,
-                storage_dir=f"{index_path}/rolling_buffer/channel_{ROLLING_BUFFER_CHANNEL}",
+                storage_dir=str(CLIPS_DIRECTORY / "rolling_buffer" / f"channel_{ROLLING_BUFFER_CHANNEL}"),
                 segment_seconds=ROLLING_SEGMENT_SECONDS,
-                retention_seconds=LOCAL_CLIP_SECONDS + 20,
+                retention_seconds=BUFFER_RETENTION_SECONDS,
                 ffmpeg_bin=FFMPEG_BIN,
-                stream="sub",
+                stream=_preferred_stream(),
             )
             await rolling_buffer.start()
         except Exception as e:
@@ -205,6 +237,11 @@ async def lifespan(app: FastAPI):
             await rolling_buffer.stop()
         except Exception as e:
             logger.error("Error stopping rolling buffer: %s", e)
+    if storage_manager:
+        try:
+            await storage_manager.stop()
+        except Exception as e:
+            logger.error("Error stopping storage manager: %s", e)
     if nvr_host:
         try:
             await nvr_host.logout()
@@ -216,9 +253,18 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Reolink NVR HA App",
     description="REST API wrapper for Reolink NVR recording search and filtering",
-    version="0.4.7",
+    version="0.4.8",
     lifespan=lifespan,
 )
+
+if ALLOW_CORS:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 
 # ─── Helper ───────────────────────────────────────────────────────────────────
@@ -226,6 +272,10 @@ app = FastAPI(
 def _require_nvr():
     if not nvr_host:
         raise HTTPException(status_code=503, detail="NVR not connected. Check add-on logs.")
+
+
+def _preferred_stream() -> str:
+    return "main" if CLIP_QUALITY == "high" else "sub"
 
 
 def _normalize_event_type(event_type: Optional[str]) -> Optional[str]:
@@ -481,7 +531,7 @@ async def _hydrate_event_clip(entry: TimelineEntry) -> Optional[TimelineEntry]:
 
 
 def _event_clip_storage_path(channel: int, timestamp: datetime, event_type: str) -> Path:
-    base_dir = Path(os.getenv("HOME_ASSISTANT_DATA_DIR", "/data/reolink")) / "event_clips"
+    base_dir = CLIPS_DIRECTORY / "event_clips"
     day_dir = base_dir / f"channel_{channel}" / timestamp.strftime("%Y-%m-%d")
     day_dir.mkdir(parents=True, exist_ok=True)
     clip_name = f"{timestamp.strftime('%Y%m%dT%H%M%S')}_{event_type.lower()}.mp4"
@@ -494,8 +544,8 @@ async def _generate_buffered_event_clip(entry: TimelineEntry) -> None:
         return
 
     clip_path = _event_clip_storage_path(entry.channel, entry.timestamp, entry.event_type)
-    clip_start = entry.timestamp - timedelta(seconds=max(int(os.getenv("CLIP_DURATION_BEFORE", "5")), 1))
-    clip_end = entry.timestamp + timedelta(seconds=max(int(os.getenv("CLIP_DURATION_AFTER", "5")), 1))
+    clip_start = entry.timestamp - timedelta(seconds=max(CLIP_DURATION_BEFORE, 1))
+    clip_end = entry.timestamp + timedelta(seconds=max(CLIP_DURATION_AFTER, 1))
 
     generating_metadata = dict(entry.metadata or {})
     generating_metadata["clip_status"] = "generating"
@@ -562,7 +612,7 @@ async def _capture_direct_event_clip(entry: TimelineEntry, clip_path: Path) -> N
         return
 
     try:
-        rtsp_url = await nvr_host.get_rtsp_stream_source(entry.channel, stream="sub")
+        rtsp_url = await nvr_host.get_rtsp_stream_source(entry.channel, stream=_preferred_stream())
     except Exception as e:
         logger.error("Direct RTSP fallback failed for %s: %s", entry.entry_id, e)
         return
@@ -714,7 +764,7 @@ async def root(request: Request):
         return HTMLResponse(_dashboard_html())
     return {
         "name": "Reolink NVR HA App",
-        "version": "0.4.7",
+        "version": "0.4.8",
         "status": "running",
         "docs": "/docs",
         "health": "/api/health",
@@ -1656,4 +1706,4 @@ async def debug_info():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=API_PORT)
+    uvicorn.run(app, host=API_HOST, port=API_PORT)
