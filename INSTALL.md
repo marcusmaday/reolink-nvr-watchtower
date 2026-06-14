@@ -2,11 +2,18 @@
 
 ## Home Assistant Add-On
 
-1. Add the repository to Home Assistant.
-2. Install **Reolink Enhanced API** from the add-on store.
-3. Open the add-on configuration page.
-4. Set your NVR host, username, password, and port.
-5. Start the add-on.
+1. In Home Assistant, go to `Settings` -> `Add-ons` -> `Add-on Store`.
+2. Open the three-dot menu and choose `Repositories`.
+3. Add this repository:
+
+```text
+https://github.com/marcusmaday/reolink-nvr-ha-app
+```
+
+4. Install **Reolink Enhanced API** from the add-on store.
+5. Open the add-on configuration page.
+6. Set your NVR host, username, password, and port.
+7. Start the add-on.
 
 Recommended starting values:
 
@@ -42,3 +49,25 @@ The API will be available at `http://localhost:5000`.
 3. Run a search for a known date range.
 4. Open `/docs` for the interactive API browser.
 
+## Home Assistant Notifications
+
+The app is designed to work with existing Home Assistant automations. The easiest setup is to import the blueprint instead of hand-editing an automation file.
+
+Import this blueprint in Home Assistant:
+
+```text
+https://raw.githubusercontent.com/marcusmaday/reolink-nvr-ha-app/main/blueprints/automation/reolink_enhanced_notification.yaml
+```
+
+Then create the automation from the blueprint and choose:
+
+1. Your doorbell sensor
+2. Your person sensor
+3. Your camera snapshot entity
+4. Your front door lock
+5. Your two `notify` services
+6. Your remote app base URL
+
+Use placeholders for your remote Home Assistant URL. Do not hard-code a private Nabu Casa URL in shared docs.
+
+This blueprint also handles the `UNLOCK_DOOR` notification action, so you do not need a separate unlock automation when you use it.

@@ -27,11 +27,13 @@ Reolink Enhanced API is a Home Assistant app and REST service for browsing Reoli
 
 ## Start Here
 
-1. Configure your NVR connection in the Home Assistant app or in `.env` for local Docker.
-2. Start the service.
-3. Open the dashboard at `http://localhost:5000/app`.
-4. Open the API docs at `http://localhost:5000/docs`.
-5. Try a search.
+1. Add the repository in Home Assistant: `Settings` -> `Add-ons` -> `Add-on Store` -> `Repositories`.
+2. Install **Reolink Enhanced API**.
+3. Configure your NVR connection in the Home Assistant app or in `.env` for local Docker.
+4. Start the service.
+5. Open the dashboard at `http://localhost:5000/app`.
+6. Open the API docs at `http://localhost:5000/docs`.
+7. Try a search.
 
 ```bash
 curl "http://localhost:5000/api/search?channel=8&start_date=2026-06-11&event_type=PERSON&stream=main"
@@ -83,6 +85,32 @@ Common settings:
 - `DEBUG`
 
 For Home Assistant app installs, these are supplied through the app options UI.
+
+## Home Assistant Notifications
+
+The intended workflow is to ingest `PERSON` and `DOORBELL` events into the app, then route mobile notifications back into the app UI.
+
+The easiest setup is to import the Home Assistant blueprint instead of editing automation YAML directly:
+
+```text
+https://raw.githubusercontent.com/marcusmaday/reolink-nvr-ha-app/main/blueprints/automation/reolink_enhanced_notification.yaml
+```
+
+That blueprint lets you choose the sensors, lock, phone notification services, and the remote app URL from the Home Assistant UI.
+It also handles the `UNLOCK_DOOR` action from the notification button, so it replaces the separate unlock automation.
+
+Use placeholders in shared examples instead of a real remote-access URL:
+
+```yaml
+app_base_url: "https://YOUR_HA_REMOTE_URL/app/reolink_enhanced_api"
+```
+
+Recommended notification behavior:
+
+- snapshot thumbnail in the notification
+- tap opens the event in the app
+- `PERSON` actions: `View Event Clip`, `View Live Stream`
+- `DOORBELL` actions: `View Event Clip`, `Unlock Front Door`
 
 ## Troubleshooting
 

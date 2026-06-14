@@ -1,0 +1,181 @@
+blueprint:
+  name: Reolink Enhanced Notification Actions
+  description: >
+    Send thumbnail-based PERSON and DOORBELL notifications that open the event
+    clip in the app and provide either live view or front-door unlock actions.
+  domain: automation
+  input:
+    doorbell_sensor:
+      name: Doorbell sensor
+      description: Binary sensor that turns on for a doorbell event.
+      selector:
+        entity:
+          domain: binary_sensor
+    person_sensor:
+      name: Person sensor
+      description: Binary sensor that turns on for a person event.
+      selector:
+        entity:
+          domain: binary_sensor
+    snapshot_camera:
+      name: Snapshot camera
+      description: Camera entity used to capture the notification thumbnail.
+      selector:
+        entity:
+          domain: camera
+    front_door_lock:
+      name: Front door lock
+      description: Lock entity used for the doorbell unlock action.
+      selector:
+        entity:
+          domain: lock
+    camera_channel:
+      name: Camera channel
+      description: NVR channel number for the front door camera.
+      default: 8
+      selector:
+        number:
+          min: 0
+          max: 64
+          mode: box
+    app_base_url:
+      name: App base URL
+      description: >
+        The remote-access URL to the app, without query parameters.
+      default: "https://YOUR_HA_REMOTE_URL/app/15e0e6e5_reolink_enhanced_api"
+      selector:
+        text: {}
+    notify_service_primary:
+      name: Primary notification service
+      description: Mobile notification service for the first phone.
+      selector:
+        service:
+          domain: notify
+    notify_service_secondary:
+      name: Secondary notification service
+      description: Mobile notification service for the second phone.
+      selector:
+        service:
+          domain: notify
+
+mode: single
+
+triggers:
+  - trigger: event
+    event_type: mobile_app_notification_action
+    event_data:
+      action: UNLOCK_DOOR
+    id: unlock_door
+  - trigger: state
+    entity_id: !input doorbell_sensor
+    to: "on"
+    id: doorbell
+  - trigger: state
+    entity_id: !input person_sensor
+    to: "on"
+    id: person
+
+actions:
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.id == 'unlock_door' }}"
+        sequence:
+          - action: lock.unlock
+            target:
+              entity_id: !input front_door_lock
+
+  - variables:
+      channel: !input camera_channel
+      base_url: !input app_base_url
+      event_type: "{{ 'DOORBELL' if trigger.id == 'doorbell' else 'PERSON' }}"
+      snapshot_file: "/config/www/tmp/doorbell_snapshot_{{ trigger.id }}.jpg"
+      snapshot_url: "/local/tmp/doorbell_snapshot_{{ trigger.id }}.jpg"
+      app_event_url: "{{ base_url }}?channel={{ channel }}&event_type={{ event_type }}"
+      app_live_url: "{{ base_url }}/live?channel={{ channel }}&event_type={{ event_type }}"
+      notif_title: "{{ 'Doorbell' if trigger.id == 'doorbell' else 'Person detected' }}"
+      msg: >-
+        {{ 'Someone is at the door.' if trigger.id == 'doorbell' else 'Person detected at the front door.' }}
+
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.id in ['doorbell', 'person'] }}"
+        sequence:
+          - action: camera.snapshot
+            target:
+              entity_id: !input snapshot_camera
+            data:
+              filename: "{{ snapshot_file }}"
+
+  - delay: "00:00:01"
+
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.id == 'unlock_door' }}"
+        sequence: []
+
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.id == 'doorbell' }}"
+        sequence:
+          - action: !input notify_service_primary
+            data:
+              title: "{{ notif_title }}"
+              message: "{{ msg }}"
+              data:
+                image: "{{ snapshot_url }}?v={{ now().timestamp() | int }}"
+                clickAction: "{{ app_event_url }}"
+                actions:
+                  - action: UNLOCK_DOOR
+                    title: Unlock Front Door
+                  - action: URI
+                    title: View Event Clip
+                    uri: "{{ app_event_url }}"
+          - action: !input notify_service_secondary
+            data:
+              title: "{{ notif_title }}"
+              message: "{{ msg }}"
+              data:
+                image: "{{ snapshot_url }}?v={{ now().timestamp() | int }}"
+                clickAction: "{{ app_event_url }}"
+                actions:
+                  - action: UNLOCK_DOOR
+                    title: Unlock Front Door
+                  - action: URI
+                    title: View Event Clip
+                    uri: "{{ app_event_url }}"
+
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.id == 'person' }}"
+        sequence:
+          - action: !input notify_service_primary
+            data:
+              title: "{{ notif_title }}"
+              message: "{{ msg }}"
+              data:
+                image: "{{ snapshot_url }}?v={{ now().timestamp() | int }}"
+                clickAction: "{{ app_event_url }}"
+                actions:
+                  - action: URI
+                    title: View Event Clip
+                    uri: "{{ app_event_url }}"
+                  - action: URI
+                    title: View Live Stream
+                    uri: "{{ app_live_url }}"
+          - action: !input notify_service_secondary
+            data:
+              title: "{{ notif_title }}"
+              message: "{{ msg }}"
+              data:
+                image: "{{ snapshot_url }}?v={{ now().timestamp() | int }}"
+                clickAction: "{{ app_event_url }}"
+                actions:
+                  - action: URI
+                    title: View Event Clip
+                    uri: "{{ app_event_url }}"
+                  - action: URI
+                    title: View Live Stream
+                    uri: "{{ app_live_url }}"
