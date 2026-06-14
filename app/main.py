@@ -14,6 +14,8 @@ import os
 import html
 import logging
 import asyncio
+import socket
+import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Any
 from contextlib import asynccontextmanager
@@ -57,6 +59,10 @@ LOCAL_CLIP_SECONDS = max(
 FFMPEG_BIN = os.getenv("FFMPEG_BIN", "ffmpeg")
 ROLLING_BUFFER_CHANNEL = int(os.getenv("ROLLING_BUFFER_CHANNEL", "8"))
 ROLLING_SEGMENT_SECONDS = int(os.getenv("ROLLING_SEGMENT_SECONDS", "2"))
+WEBHOOK_ENABLED = os.getenv("WEBHOOK_ENABLED", "true").lower() == "true"
+WEBHOOK_CHANNEL = int(os.getenv("WEBHOOK_CHANNEL", str(ROLLING_BUFFER_CHANNEL)))
+WEBHOOK_PATH = os.getenv("WEBHOOK_PATH", "/api/webhook/reolink")
+WEBHOOK_BASE_URL = os.getenv("WEBHOOK_BASE_URL")
 
 logging.basicConfig(
     level=logging.DEBUG if DEBUG else logging.INFO,
@@ -152,6 +158,62 @@ class RecentEvent(BaseModel):
 
 # ─── Lifespan (startup / shutdown) ───────────────────────────────────────────
 
+def _resolve_local_webhook_base_url() -> Optional[str]:
+    if WEBHOOK_BASE_URL:
+        return WEBHOOK_BASE_URL.rstrip("/")
+
+    candidates: list[str] = []
+    try:
+        candidates.append(socket.gethostbyname(socket.gethostname()))
+    except Exception:
+        pass
+
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.connect(("8.8.8.8", 80))
+            candidates.append(sock.getsockname()[0])
+    except Exception:
+        pass
+
+    for candidate in candidates:
+        if candidate and candidate != "127.0.0.1" and not candidate.startswith("0."):
+            return f"http://{candidate}:5000"
+    return None
+
+
+async def _register_webhook() -> None:
+    if not nvr_host or not WEBHOOK_ENABLED:
+        return
+
+    base_url = _resolve_local_webhook_base_url()
+    if not base_url:
+        logger.warning("Could not resolve a local webhook base URL; skipping NVR webhook registration")
+        return
+
+    webhook_url = f"{base_url}{WEBHOOK_PATH}"
+    try:
+        await nvr_host.webhook_add(WEBHOOK_CHANNEL, webhook_url)
+        logger.info("Registered NVR webhook for channel %s at %s", WEBHOOK_CHANNEL, webhook_url)
+    except Exception as e:
+        logger.error("Failed to register NVR webhook at %s: %s", webhook_url, e)
+
+
+async def _remove_webhook() -> None:
+    if not nvr_host or not WEBHOOK_ENABLED:
+        return
+
+    base_url = _resolve_local_webhook_base_url()
+    if not base_url:
+        return
+
+    webhook_url = f"{base_url}{WEBHOOK_PATH}"
+    try:
+        await nvr_host.webhook_remove(WEBHOOK_CHANNEL, webhook_url)
+        logger.info("Removed NVR webhook for channel %s at %s", WEBHOOK_CHANNEL, webhook_url)
+    except Exception as e:
+        logger.debug("Could not remove NVR webhook at %s: %s", webhook_url, e)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global nvr_host, timeline_index, rolling_buffer
@@ -180,6 +242,8 @@ async def lifespan(app: FastAPI):
     timeline_index = TimelineIndex(index_file=f"{index_path}/timeline.json")
     logger.info("Timeline index initialized at %s/timeline.json", index_path)
 
+    await _register_webhook()
+
     if LOCAL_CLIP_ENABLED and nvr_host:
         try:
             rolling_buffer = RollingSegmentBuffer(
@@ -206,6 +270,10 @@ async def lifespan(app: FastAPI):
             logger.error("Error stopping rolling buffer: %s", e)
     if nvr_host:
         try:
+            await _remove_webhook()
+        except Exception as e:
+            logger.error("Error removing webhook: %s", e)
+        try:
             await nvr_host.logout()
         except Exception as e:
             logger.error("Error during logout: %s", e)
@@ -215,7 +283,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Reolink NVR HA App",
     description="REST API wrapper for Reolink NVR recording search and filtering",
-    version="0.4.4",
+    version="0.4.5",
     lifespan=lifespan,
 )
 
@@ -265,6 +333,97 @@ def _timeline_entry_to_recent(entry: TimelineEntry) -> dict[str, Any]:
         "duration_seconds": metadata.get("duration_seconds"),
         "metadata": metadata,
     }
+
+
+def _parse_onvif_event_notifications(data: str) -> list[dict[str, Any]]:
+    try:
+        root = ET.fromstring(data)
+    except Exception as e:
+        logger.debug("Failed to parse ONVIF webhook payload: %s", e)
+        return []
+
+    namespace_wsn = "{http://docs.oasis-open.org/wsn/b-2}"
+    namespace_schema = "{http://www.onvif.org/ver10/schema}"
+
+    parsed: list[dict[str, Any]] = []
+    for message in root.iter(f"{namespace_wsn}NotificationMessage"):
+        topic_element = message.find(f"{namespace_wsn}Topic[@Dialect='http://www.onvif.org/ver10/tev/topicExpression/ConcreteSet']")
+        if topic_element is None or not topic_element.text:
+            continue
+
+        rule = Path(topic_element.text).name
+        if rule not in {"Motion", "MotionAlarm", "FaceDetect", "PeopleDetect", "VehicleDetect", "DogCatDetect", "Package", "Visitor"}:
+            continue
+
+        channel = None
+        source_element = message.find(f".//{namespace_schema}SimpleItem[@Name='Source']")
+        if source_element is None:
+            source_element = message.find(f".//{namespace_schema}SimpleItem[@Name='VideoSourceConfigurationToken']")
+        if source_element is not None and "Value" in source_element.attrib:
+            try:
+                channel = int(source_element.attrib["Value"])
+            except ValueError:
+                channel = None
+
+        if channel is None:
+            continue
+
+        if rule in {"PeopleDetect", "FaceDetect", "DogCatDetect", "Package"}:
+            event_type = "PERSON"
+        elif rule == "Visitor":
+            event_type = "DOORBELL"
+        elif rule in {"Motion", "MotionAlarm"}:
+            event_type = "MOTION"
+        elif rule == "VehicleDetect":
+            event_type = "VEHICLE"
+        else:
+            event_type = None
+
+        if event_type is None:
+            continue
+
+        parsed.append({
+            "channel": channel,
+            "event_type": event_type,
+            "rule": rule,
+        })
+
+    return parsed
+
+
+def _create_event_entry(
+    *,
+    channel: int,
+    event_type: str,
+    timestamp: Optional[datetime] = None,
+    camera_name: Optional[str] = None,
+    source: str = "nvr_webhook",
+    title: Optional[str] = None,
+    message: Optional[str] = None,
+    snapshot_url: Optional[str] = None,
+    live_url: Optional[str] = None,
+) -> TimelineEntry:
+    event_timestamp = timestamp or datetime.now()
+    entry = TimelineEntry(
+        entry_id=f"{channel}_{event_timestamp.isoformat()}_{event_type}",
+        timestamp=event_timestamp,
+        channel=channel,
+        event_type=event_type,
+        clip_path=None,
+        thumbnail_path=snapshot_url,
+        metadata={
+            "title": title or f"{event_type.title()} detected",
+            "message": message or f"{event_type.title()} detected on channel {channel}",
+            "camera_name": camera_name,
+            "source": source,
+            "snapshot_url": snapshot_url,
+            "live_url": live_url,
+            "clip_status": "pending",
+            "clip_source": "local_rtsp",
+        },
+    )
+    timeline_index.upsert_entry(entry)
+    return entry
 
 
 async def _broadcast_recent_event(entry: TimelineEntry):
@@ -622,7 +781,7 @@ async def root(request: Request):
         return HTMLResponse(_dashboard_html())
     return {
         "name": "Reolink NVR HA App",
-        "version": "0.4.4",
+        "version": "0.4.5",
         "status": "running",
         "docs": "/docs",
         "health": "/api/health",
@@ -900,6 +1059,51 @@ async def ingest_event(payload: EventIngestRequest):
         "status": "accepted",
         "event": _timeline_entry_to_recent(entry),
     }
+
+
+@app.post("/api/webhook/reolink", summary="Receive a Reolink ONVIF webhook event")
+@app.post("/app/api/webhook/reolink", include_in_schema=False)
+async def receive_reolink_webhook(request: Request):
+    _require_nvr()
+    body = (await request.body()).decode("utf-8", errors="ignore")
+    if not body.strip():
+        raise HTTPException(status_code=400, detail="Empty webhook payload")
+
+    try:
+        event_channels = await nvr_host.ONVIF_event_callback(body)
+    except Exception as e:
+        logger.error("Failed to process ONVIF webhook payload: %s", e)
+        raise HTTPException(status_code=400, detail=f"Invalid ONVIF payload: {e}")
+
+    parsed_events = _parse_onvif_event_notifications(body)
+    if not parsed_events:
+        return {"status": "ignored", "detail": "No supported event types found"}
+
+    created: list[dict[str, Any]] = []
+    for parsed in parsed_events:
+        if event_channels and parsed["channel"] not in event_channels:
+            continue
+        camera_name = None
+        try:
+            camera_name = nvr_host.camera_name(parsed["channel"])
+        except Exception:
+            camera_name = None
+        entry = _create_event_entry(
+            channel=parsed["channel"],
+            event_type=parsed["event_type"],
+            camera_name=camera_name,
+            source="nvr_webhook",
+            title=f"{parsed['event_type'].title()} detected",
+            message=f"{parsed['event_type'].title()} detected on channel {parsed['channel']}",
+        )
+        await _broadcast_recent_event(entry)
+        _schedule_clip_generation(entry)
+        created.append(_timeline_entry_to_recent(entry))
+
+    if not created:
+        return {"status": "ignored", "detail": "No matching channels found"}
+
+    return {"status": "accepted", "events": created}
 
 
 @app.get("/api/timeline/{entry_id}", summary="Get a single timeline entry")

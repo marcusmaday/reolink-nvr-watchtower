@@ -75,6 +75,8 @@ https://raw.githubusercontent.com/marcusmaday/reolink-nvr-ha-app/main/blueprints
 Import it in Home Assistant, then set your sensors, lock, notification services, and app base URL.
 
 The blueprint also handles the `UNLOCK_DOOR` action from the notification button, so it replaces the separate unlock automation.
+The app registers its own NVR webhook on startup when supported, so the event timeline does not depend on a Home Assistant relay.
+If auto-detection cannot find the app's LAN address, set `webhook_base_url` in the add-on options.
 
 If you are writing a manual example, keep the real remote URL out of shared examples and use a placeholder:
 

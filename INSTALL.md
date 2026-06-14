@@ -71,3 +71,6 @@ Then create the automation from the blueprint and choose:
 Use placeholders for your remote Home Assistant URL. Do not hard-code a private Nabu Casa URL in shared docs.
 
 This blueprint also handles the `UNLOCK_DOOR` notification action, so you do not need a separate unlock automation when you use it.
+
+The app also registers its own NVR webhook on startup when the NVR supports it, so the timeline stays in sync without a Home Assistant relay.
+If your LAN uses an unusual network layout, set the add-on's `webhook_base_url` option so the NVR can reach the app directly.

@@ -24,6 +24,10 @@ if [ -f "$CONFIG_PATH" ]; then
     export RETENTION_DAYS=$(jq -r '.retention_days' "$CONFIG_PATH")
     export MAX_STORAGE_MB=$(jq -r '.max_storage_mb' "$CONFIG_PATH")
     export DEBUG=$(jq -r '.debug' "$CONFIG_PATH")
+    export WEBHOOK_ENABLED=$(jq -r '.webhook_enabled // true' "$CONFIG_PATH")
+    export WEBHOOK_CHANNEL=$(jq -r '.webhook_channel // 8' "$CONFIG_PATH")
+    export WEBHOOK_BASE_URL=$(jq -r '.webhook_base_url // empty' "$CONFIG_PATH")
+    export WEBHOOK_PATH=$(jq -r '.webhook_path // "/api/webhook/reolink"' "$CONFIG_PATH")
     
     echo "Configuration:"
     echo "  NVR Host: $NVR_HOST:$NVR_PORT"
@@ -32,6 +36,8 @@ if [ -f "$CONFIG_PATH" ]; then
     echo "  Buffer Enabled: $BUFFER_ENABLED"
     echo "  Retention: $RETENTION_DAYS days"
     echo "  Debug: $DEBUG"
+    echo "  Webhook Enabled: $WEBHOOK_ENABLED"
+    echo "  Webhook Channel: $WEBHOOK_CHANNEL"
 else
     echo "No options.json found, using defaults"
 fi
