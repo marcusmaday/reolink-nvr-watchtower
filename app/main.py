@@ -253,7 +253,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Reolink NVR HA App",
     description="REST API wrapper for Reolink NVR recording search and filtering",
-    version="0.4.10",
+    version="0.4.11",
     lifespan=lifespan,
 )
 
@@ -764,7 +764,7 @@ async def root(request: Request):
         return HTMLResponse(_dashboard_html())
     return {
         "name": "Reolink NVR HA App",
-        "version": "0.4.10",
+        "version": "0.4.11",
         "status": "running",
         "docs": "/docs",
         "health": "/api/health",
@@ -1135,6 +1135,9 @@ async def get_event_live(entry_id: str):
     if not source:
         raise HTTPException(status_code=404, detail="No live source stored for this event")
 
+    if source.startswith("/"):
+        return RedirectResponse(source)
+
     if _is_http_url(source):
         return RedirectResponse(source)
 
@@ -1398,15 +1401,22 @@ def _dashboard_html() -> str:
     main {
       display: grid;
       grid-template-columns: minmax(320px, 360px) minmax(0, 1fr);
-      min-height: calc(100vh - 65px);
+      height: calc(100vh - 65px);
+      overflow: hidden;
     }
     aside {
       border-right: 1px solid var(--line);
       background: var(--panel);
       overflow: auto;
       -webkit-overflow-scrolling: touch;
+      min-height: 0;
     }
-    section.player { display: grid; grid-template-rows: auto 1fr auto; min-height: 0; }
+    section.player {
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr) auto;
+      min-height: 0;
+      overflow: hidden;
+    }
     .toolbar {
       display:flex;
       gap: 8px;
@@ -1440,7 +1450,7 @@ def _dashboard_html() -> str:
     .event .time { color: var(--muted); font-size: 12px; margin-top: 4px; line-height: 1.3; }
     .badge { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; padding: 3px 7px; border-radius: 999px; background: rgba(90,169,255,.16); color: #d5ebff; white-space: nowrap; }
     .badge.doorbell { background: rgba(255,203,107,.18); color: #ffe4a0; }
-    .player-wrap { padding: 16px; display:grid; gap: 14px; min-height: 0; }
+    .player-wrap { padding: 16px; display:grid; gap: 14px; min-height: 0; overflow: hidden; }
     video, img.preview {
       width: 100%;
       max-height: 64vh;
@@ -1449,21 +1459,57 @@ def _dashboard_html() -> str:
       border-radius: 10px;
       object-fit: contain;
     }
-    .details { display:grid; gap: 8px; padding: 0 16px 16px; color: var(--muted); font-size: 14px; }
+    .details {
+      display: grid;
+      gap: 8px;
+      padding: 0 16px 16px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.35;
+      overflow: hidden;
+    }
     .details strong { color: var(--text); }
+    .detail-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 10px;
+      align-items: center;
+    }
+    .detail-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      padding: 0.3rem 0.55rem;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(255,255,255,0.03);
+      color: var(--text);
+      font-size: 12px;
+    }
+    .detail-pill.doorbell {
+      background: rgba(255,203,107,.18);
+      color: #ffe4a0;
+    }
+    .detail-note {
+      color: var(--muted);
+      font-size: 13px;
+    }
     .empty { padding: 20px; color: var(--muted); }
     .row { display:flex; gap: 8px; flex-wrap: wrap; align-items:center; }
     .muted { color: var(--muted); }
     a.chip { display: inline-flex; align-items: center; text-decoration: none; }
     @media (max-width: 900px) {
-      main { grid-template-columns: 1fr; }
+      main {
+        grid-template-columns: 1fr;
+        grid-template-rows: minmax(280px, 42vh) minmax(0, 1fr);
+      }
       aside { border-right: 0; border-bottom: 1px solid var(--line); order: 2; }
       section.player { order: 1; }
       header { align-items: flex-start; flex-direction: column; }
       .toolbar { overflow-x: auto; flex-wrap: nowrap; }
       video, img.preview { max-height: 34vh; }
       .player-wrap { padding: 12px; }
-      .details { padding: 0 12px 12px; font-size: 15px; }
+      .details { padding: 0 12px 12px; font-size: 13px; }
       .event { padding: 16px; }
     }
   </style>
@@ -1603,11 +1649,13 @@ def _dashboard_html() -> str:
         player.hidden = true;
       }
       details.innerHTML = `
-        <div><strong>${escapeHtml(entry.title || entry.event_type)}</strong></div>
-        <div>${escapeHtml(formatTime(entry.timestamp))}</div>
-        <div>${escapeHtml(entry.camera_name ? `Camera: ${entry.camera_name}` : `Channel: ${entry.channel}`)}</div>
-        <div>${escapeHtml(entry.message || '')}</div>
-        ${entry.clip_status ? `<div>${escapeHtml(`Clip: ${entry.clip_status}`)}</div>` : ''}
+        <div class="detail-meta">
+          <span class="detail-pill ${entry.event_type === 'DOORBELL' ? 'doorbell' : ''}">${escapeHtml(entry.event_type)}</span>
+          <span class="detail-pill">${escapeHtml(formatTime(entry.timestamp))}</span>
+          <span class="detail-pill">${escapeHtml(entry.camera_name ? entry.camera_name : `Channel ${entry.channel}`)}</span>
+          ${entry.clip_status && entry.clip_status !== 'ready' ? `<span class="detail-pill">${escapeHtml(`Clip ${entry.clip_status}`)}</span>` : ''}
+        </div>
+        ${entry.message && entry.message !== entry.title ? `<div class="detail-note">${escapeHtml(entry.message)}</div>` : ''}
         <div class="row">
           ${entry.live_url ? `<a class="chip" href="${entry.live_url}" target="_blank" rel="noreferrer">Open live</a>` : ''}
         </div>

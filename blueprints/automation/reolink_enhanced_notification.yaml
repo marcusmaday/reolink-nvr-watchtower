@@ -47,7 +47,7 @@ blueprint:
     app_base_url:
       name: App base URL
       description: >
-        The remote-access URL to the app, without query parameters.
+        The Home Assistant deep link used to open the app on phones.
       default: "homeassistant://navigate/app/15e0e6e5_reolink_enhanced_api"
       selector:
         text: {}
@@ -99,6 +99,9 @@ actions:
       event_timestamp: "{{ now().isoformat() }}"
       snapshot_file: "/config/www/tmp/doorbell_snapshot_{{ trigger.id }}.jpg"
       snapshot_url: "/local/tmp/doorbell_snapshot_{{ trigger.id }}.jpg"
+      app_path_base: "/app/15e0e6e5_reolink_enhanced_api"
+      app_event_path: "{{ app_path_base }}?channel={{ channel }}&event_type={{ event_type }}"
+      app_live_path: "{{ app_path_base }}/live?channel={{ channel }}&event_type={{ event_type }}"
       app_event_url: "{{ base_url }}?channel={{ channel }}&event_type={{ event_type }}"
       app_live_url: "{{ base_url }}/live?channel={{ channel }}&event_type={{ event_type }}"
       notif_title: "{{ 'Doorbell' if trigger.id == 'doorbell' else 'Person detected' }}"
@@ -128,12 +131,12 @@ actions:
       event_type: "{{ event_type }}"
       channel: "{{ channel }}"
       timestamp: "{{ event_timestamp }}"
-              camera_name: "{{ cam_name }}"
-              snapshot_url: "{{ snapshot_url }}"
-              live_url: "{{ app_live_url }}"
-              title: "{{ notif_title }}"
-              message: "{{ msg }}"
-              source: "home_assistant"
+      camera_name: "{{ cam_name }}"
+      snapshot_url: "{{ snapshot_url }}"
+      live_url: "{{ app_live_path }}"
+      title: "{{ notif_title }}"
+      message: "{{ msg }}"
+      source: "home_assistant"
 
   - choose:
       - conditions:
@@ -158,6 +161,9 @@ actions:
                   - action: URI
                     title: View Event Clip
                     uri: "{{ app_event_url }}"
+                  - action: URI
+                    title: View Live Stream
+                    uri: "{{ app_live_url }}"
           - action: !input notify_service_secondary
             data:
               title: "{{ notif_title }}"
@@ -171,6 +177,9 @@ actions:
                   - action: URI
                     title: View Event Clip
                     uri: "{{ app_event_url }}"
+                  - action: URI
+                    title: View Live Stream
+                    uri: "{{ app_live_url }}"
 
       - conditions:
           - condition: template
