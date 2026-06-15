@@ -105,7 +105,7 @@ def get_config() -> AppConfig:
     external_storage = os.getenv("EXTERNAL_STORAGE_PATH", None) or None
     base_dir = external_storage or ha_data_dir
     clips_dir = os.path.join(base_dir, "reolink_clips")
-    index_file = os.path.join(base_dir, "reolink_timeline.json")
+    index_file = os.path.join(base_dir, "timeline.json")
 
     retention_days = int(os.getenv("RETENTION_DAYS", "7"))
     max_storage_mb = int(os.getenv("MAX_STORAGE_MB", "5000"))

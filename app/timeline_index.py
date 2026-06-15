@@ -50,9 +50,16 @@ class TimelineIndex:
 
     def _load_index(self):
         """Load index from disk."""
-        if self.index_file.exists():
+        index_path = self.index_file
+        if not index_path.exists() and index_path.name == "timeline.json":
+            legacy_path = index_path.with_name("reolink_timeline.json")
+            if legacy_path.exists():
+                logger.info("Legacy timeline index found at %s; loading it instead", legacy_path)
+                index_path = legacy_path
+
+        if index_path.exists():
             try:
-                with open(self.index_file, "r") as f:
+                with open(index_path, "r") as f:
                     data = json.load(f)
                     for item in data:
                         entry = TimelineEntry(
