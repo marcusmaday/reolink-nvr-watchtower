@@ -253,7 +253,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Reolink NVR HA App",
     description="REST API wrapper for Reolink NVR recording search and filtering",
-    version="0.4.11",
+    version="0.4.12",
     lifespan=lifespan,
 )
 
@@ -764,7 +764,7 @@ async def root(request: Request):
         return HTMLResponse(_dashboard_html())
     return {
         "name": "Reolink NVR HA App",
-        "version": "0.4.11",
+        "version": "0.4.12",
         "status": "running",
         "docs": "/docs",
         "health": "/api/health",
@@ -1501,13 +1501,16 @@ def _dashboard_html() -> str:
     @media (max-width: 900px) {
       main {
         grid-template-columns: 1fr;
-        grid-template-rows: minmax(280px, 42vh) minmax(0, 1fr);
+        grid-template-rows: minmax(340px, 58vh) minmax(0, 1fr);
       }
       aside { border-right: 0; border-bottom: 1px solid var(--line); order: 2; }
       section.player { order: 1; }
       header { align-items: flex-start; flex-direction: column; }
       .toolbar { overflow-x: auto; flex-wrap: nowrap; }
-      video, img.preview { max-height: 34vh; }
+      video, img.preview {
+        max-height: none;
+        height: min(100%, 58vh);
+      }
       .player-wrap { padding: 12px; }
       .details { padding: 0 12px 12px; font-size: 13px; }
       .event { padding: 16px; }
