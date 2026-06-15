@@ -48,7 +48,7 @@ blueprint:
       name: App base URL
       description: >
         The remote-access URL to the app, without query parameters.
-      default: "https://YOUR_HA_REMOTE_URL/app/15e0e6e5_reolink_enhanced_api"
+      default: "homeassistant://navigate/app/15e0e6e5_reolink_enhanced_api"
       selector:
         text: {}
     notify_service_primary:
