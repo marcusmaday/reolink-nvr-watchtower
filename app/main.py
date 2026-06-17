@@ -253,7 +253,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Reolink NVR HA App",
     description="REST API wrapper for Reolink NVR recording search and filtering",
-    version="0.4.14",
+    version="0.4.15",
     lifespan=lifespan,
 )
 
@@ -546,6 +546,19 @@ async def _generate_buffered_event_clip(entry: TimelineEntry) -> None:
     clip_path = _event_clip_storage_path(entry.channel, entry.timestamp, entry.event_type)
     clip_start = entry.timestamp - timedelta(seconds=max(CLIP_DURATION_BEFORE, 1))
     clip_end = entry.timestamp + timedelta(seconds=max(CLIP_DURATION_AFTER, 1))
+    logger.debug(
+        "Buffered clip window for %s: event=%s start=%s end=%s before=%ss after=%ss",
+        entry.entry_id,
+        entry.timestamp.isoformat(),
+        clip_start.isoformat(),
+        clip_end.isoformat(),
+        CLIP_DURATION_BEFORE,
+        CLIP_DURATION_AFTER,
+    )
+    try:
+        logger.debug("Rolling buffer stats before clip for %s: %s", entry.entry_id, rolling_buffer.get_stats())
+    except Exception:
+        pass
 
     generating_metadata = dict(entry.metadata or {})
     generating_metadata["clip_status"] = "generating"
@@ -764,7 +777,7 @@ async def root(request: Request):
         return HTMLResponse(_dashboard_html())
     return {
         "name": "Reolink NVR HA App",
-        "version": "0.4.14",
+        "version": "0.4.15",
         "status": "running",
         "docs": "/docs",
         "health": "/api/health",
