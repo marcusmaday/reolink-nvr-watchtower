@@ -1,5 +1,5 @@
 name: "Reolink Enhanced API"
-version: "0.4.15"
+version: "0.4.16"
 slug: "reolink_enhanced_api"
 description: "REST + WebSocket API wrapper for Reolink NVR with event timeline and clip generation"
 url: "https://github.com/marcusmaday/reolink-nvr-ha-app"

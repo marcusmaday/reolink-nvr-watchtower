@@ -253,7 +253,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Reolink NVR HA App",
     description="REST API wrapper for Reolink NVR recording search and filtering",
-    version="0.4.15",
+    version="0.4.16",
     lifespan=lifespan,
 )
 
@@ -777,7 +777,7 @@ async def root(request: Request):
         return HTMLResponse(_dashboard_html())
     return {
         "name": "Reolink NVR HA App",
-        "version": "0.4.15",
+        "version": "0.4.16",
         "status": "running",
         "docs": "/docs",
         "health": "/api/health",
