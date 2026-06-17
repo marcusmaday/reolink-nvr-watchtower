@@ -78,6 +78,8 @@ ROLLING_BUFFER_CHANNEL = int(os.getenv("ROLLING_BUFFER_CHANNEL", "8"))
 ROLLING_SEGMENT_SECONDS = int(os.getenv("ROLLING_SEGMENT_SECONDS", "2"))
 CLIP_DURATION_BEFORE = max(APP_CONFIG.video_buffer.clip_duration_before, 10)
 CLIP_DURATION_AFTER = max(APP_CONFIG.video_buffer.clip_duration_after, 5)
+BUFFER_CLIP_RETRY_ATTEMPTS = max(int(os.getenv("BUFFER_CLIP_RETRY_ATTEMPTS", "6")), 1)
+BUFFER_CLIP_RETRY_DELAY_SECONDS = max(float(os.getenv("BUFFER_CLIP_RETRY_DELAY_SECONDS", "1")), 0.1)
 CLIPS_DIRECTORY = Path(APP_CONFIG.storage.clips_directory)
 INDEX_FILE = APP_CONFIG.storage.index_file
 RETENTION_DAYS = APP_CONFIG.storage.retention_days
@@ -253,7 +255,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Reolink NVR HA App",
     description="REST API wrapper for Reolink NVR recording search and filtering",
-    version="0.4.16",
+    version="0.4.17",
     lifespan=lifespan,
 )
 
@@ -576,9 +578,29 @@ async def _generate_buffered_event_clip(entry: TimelineEntry) -> None:
     await _broadcast_recent_event(generating_entry)
 
     try:
-        result_path = await rolling_buffer.build_clip(clip_start, clip_end, str(clip_path))
+        result_path = None
+        last_error: Optional[str] = None
+        for attempt in range(1, BUFFER_CLIP_RETRY_ATTEMPTS + 1):
+            logger.debug(
+                "Attempt %d/%d to build buffered clip for %s",
+                attempt,
+                BUFFER_CLIP_RETRY_ATTEMPTS,
+                entry.entry_id,
+            )
+            result_path = await rolling_buffer.build_clip(clip_start, clip_end, str(clip_path))
+            if result_path:
+                break
+            try:
+                stats = rolling_buffer.get_stats()
+                logger.debug("Rolling buffer stats after attempt %d for %s: %s", attempt, entry.entry_id, stats)
+            except Exception:
+                pass
+            last_error = "No buffered segments were available for the requested window"
+            if attempt < BUFFER_CLIP_RETRY_ATTEMPTS:
+                await asyncio.sleep(BUFFER_CLIP_RETRY_DELAY_SECONDS)
+
         if not result_path:
-            raise RuntimeError("No buffered segments were available for the requested window")
+            raise RuntimeError(last_error or "No buffered segments were available for the requested window")
 
         ready_metadata = dict(entry.metadata or {})
         ready_metadata["clip_status"] = "ready"
@@ -777,7 +799,7 @@ async def root(request: Request):
         return HTMLResponse(_dashboard_html())
     return {
         "name": "Reolink NVR HA App",
-        "version": "0.4.16",
+        "version": "0.4.17",
         "status": "running",
         "docs": "/docs",
         "health": "/api/health",
