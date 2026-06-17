@@ -149,18 +149,28 @@ class RollingSegmentBuffer:
             except Exception:
                 continue
 
+    @staticmethod
+    def _normalize_window_time(value: datetime) -> datetime:
+        if value.tzinfo is not None:
+            return value.astimezone().replace(tzinfo=None)
+        return value
+
     async def build_clip(self, start_time: datetime, end_time: datetime, output_path: str) -> Optional[str]:
         if end_time <= start_time:
             return None
 
-        if start_time.tzinfo is not None:
-            start_time = start_time.astimezone(timezone.utc).replace(tzinfo=None)
-        if end_time.tzinfo is not None:
-            end_time = end_time.astimezone(timezone.utc).replace(tzinfo=None)
+        start_time = self._normalize_window_time(start_time)
+        end_time = self._normalize_window_time(end_time)
 
         self._prune_old_segments()
         segments = self._load_segments()
         if not segments:
+            logger.debug(
+                "Rolling buffer has no segments for channel %d while building window %s -> %s",
+                self.channel,
+                start_time.isoformat(),
+                end_time.isoformat(),
+            )
             return None
 
         selected = []
@@ -170,7 +180,25 @@ class RollingSegmentBuffer:
                 selected.append(segment.path)
 
         if not selected:
+            logger.debug(
+                "Rolling buffer found %d segments but none overlapped window %s -> %s for channel %d; first=%s last=%s",
+                len(segments),
+                start_time.isoformat(),
+                end_time.isoformat(),
+                self.channel,
+                segments[0].start_time.isoformat() if segments else "none",
+                segments[-1].start_time.isoformat() if segments else "none",
+            )
             return None
+
+        logger.debug(
+            "Rolling buffer selected %d/%d segments for channel %d window %s -> %s",
+            len(selected),
+            len(segments),
+            self.channel,
+            start_time.isoformat(),
+            end_time.isoformat(),
+        )
 
         out_path = Path(output_path)
         out_path.parent.mkdir(parents=True, exist_ok=True)
