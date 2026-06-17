@@ -1,5 +1,5 @@
 name: "Reolink Enhanced API"
-version: "0.4.12"
+version: "0.4.13"
 slug: "reolink_enhanced_api"
 description: "REST + WebSocket API wrapper for Reolink NVR with event timeline and clip generation"
 url: "https://github.com/marcusmaday/reolink-nvr-ha-app"
@@ -30,7 +30,7 @@ options:
   nvr_ssl: false
   buffer_enabled: true
   buffer_size_seconds: 60
-  clip_duration_before: 5
+  clip_duration_before: 10
   clip_duration_after: 5
   clip_quality: "medium"
   retention_days: 7

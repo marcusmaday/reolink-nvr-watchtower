@@ -96,7 +96,7 @@ actions:
       base_url: !input app_base_url
       cam_name: !input camera_name
       event_type: "{{ 'DOORBELL' if trigger.id == 'doorbell' else 'PERSON' }}"
-      event_timestamp: "{{ now().isoformat() }}"
+      event_timestamp: "{{ trigger.to_state.last_changed.isoformat() if trigger.to_state is not none else now().isoformat() }}"
       snapshot_file: "/config/www/tmp/doorbell_snapshot_{{ trigger.id }}.jpg"
       snapshot_url: "/local/tmp/doorbell_snapshot_{{ trigger.id }}.jpg"
       app_path_base: "/app/15e0e6e5_reolink_enhanced_api"

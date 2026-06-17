@@ -76,8 +76,8 @@ BUFFER_RETENTION_SECONDS = max(
 FFMPEG_BIN = os.getenv("FFMPEG_BIN", "ffmpeg")
 ROLLING_BUFFER_CHANNEL = int(os.getenv("ROLLING_BUFFER_CHANNEL", "8"))
 ROLLING_SEGMENT_SECONDS = int(os.getenv("ROLLING_SEGMENT_SECONDS", "2"))
-CLIP_DURATION_BEFORE = APP_CONFIG.video_buffer.clip_duration_before
-CLIP_DURATION_AFTER = APP_CONFIG.video_buffer.clip_duration_after
+CLIP_DURATION_BEFORE = max(APP_CONFIG.video_buffer.clip_duration_before, 10)
+CLIP_DURATION_AFTER = max(APP_CONFIG.video_buffer.clip_duration_after, 5)
 CLIPS_DIRECTORY = Path(APP_CONFIG.storage.clips_directory)
 INDEX_FILE = APP_CONFIG.storage.index_file
 RETENTION_DAYS = APP_CONFIG.storage.retention_days
@@ -253,7 +253,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Reolink NVR HA App",
     description="REST API wrapper for Reolink NVR recording search and filtering",
-    version="0.4.12",
+    version="0.4.13",
     lifespan=lifespan,
 )
 
@@ -764,7 +764,7 @@ async def root(request: Request):
         return HTMLResponse(_dashboard_html())
     return {
         "name": "Reolink NVR HA App",
-        "version": "0.4.12",
+        "version": "0.4.13",
         "status": "running",
         "docs": "/docs",
         "health": "/api/health",
