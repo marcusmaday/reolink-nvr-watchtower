@@ -14,7 +14,7 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-SEGMENT_NAME_RE = re.compile(r"^(?P<stamp>\d{8}T\d{6})_(?P<index>\d+)?\.ts$")
+SEGMENT_NAME_RE = re.compile(r"^(?P<stamp>\d{8}T\d{6})(?:_(?P<index>\d+))?\.ts$")
 
 
 @dataclass
