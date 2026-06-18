@@ -74,7 +74,7 @@ class RollingSegmentBuffer:
                 self.ffmpeg_bin,
                 "-hide_banner",
                 "-loglevel",
-                "warning",
+                "info",
                 "-rtsp_transport",
                 "tcp",
                 "-fflags",
@@ -117,16 +117,32 @@ class RollingSegmentBuffer:
                     stdout=asyncio.subprocess.DEVNULL,
                     stderr=asyncio.subprocess.PIPE,
                 )
-                _, stderr = await proc.communicate()
+                stderr_task = asyncio.create_task(self._drain_stderr(proc.stderr))
+                await proc.wait()
+                stderr_task.cancel()
+                try:
+                    await stderr_task
+                except asyncio.CancelledError:
+                    pass
                 if self._running:
-                    detail = (stderr or b"").decode("utf-8", "ignore").strip()
-                    logger.warning("Rolling recorder exited for channel %d: %s", self.channel, detail or proc.returncode)
+                    logger.warning("Rolling recorder exited for channel %d with return code %s", self.channel, proc.returncode)
                     await asyncio.sleep(2)
             except asyncio.CancelledError:
                 raise
             except Exception as e:
                 logger.error("Rolling recorder error for channel %d: %s", self.channel, e)
                 await asyncio.sleep(2)
+
+    async def _drain_stderr(self, stream) -> None:
+        if stream is None:
+            return
+        while True:
+            line = await stream.readline()
+            if not line:
+                break
+            text = line.decode("utf-8", "ignore").rstrip()
+            if text:
+                logger.info("Rolling recorder ffmpeg[%d]: %s", self.channel, text)
 
     async def _resolve_rtsp_url(self) -> Optional[str]:
         if hasattr(self.nvr_client, "get_rtsp_url"):
