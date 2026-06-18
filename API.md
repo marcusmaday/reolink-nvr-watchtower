@@ -1,18 +1,24 @@
 # API Reference
 
-The service exposes a small REST API for checking the NVR connection, searching recordings, and browsing the event timeline.
+Reolink Enhanced API exposes a small HTTP API for the event dashboard, clip playback, live view, and timeline lookup.
 
-Base URL:
+Base URL examples:
 
 ```text
 http://localhost:5000
 ```
 
-## Health And Device Info
+When the app is opened through Home Assistant ingress, the same routes are also available under:
+
+```text
+/app/15e0e6e5_reolink_enhanced_api
+```
+
+## Core Status
 
 ### `GET /api/health`
 
-Checks whether the app can reach the NVR.
+Returns whether the app is connected to the NVR.
 
 ### `GET /api/device/info`
 
@@ -20,13 +26,17 @@ Returns the connected NVR model, firmware, MAC address, and channel count.
 
 ### `GET /api/channels`
 
-Lists the available channels and names.
+Returns the list of available channels and their names.
 
-## Search Recordings
+### `GET /api/debug/info`
+
+Returns runtime configuration and rolling-buffer status. This endpoint is only available when debug mode is enabled.
+
+## Recordings And Timeline
 
 ### `GET /api/search`
 
-Search recordings by channel, date range, and optional event type.
+Search recordings on the NVR.
 
 Parameters:
 
@@ -36,23 +46,19 @@ Parameters:
 - `event_type` optional, one of `DOORBELL`, `PERSON`, `MOTION`, `ANIMAL`, `VEHICLE`
 - `stream` optional, `sub` or `main`
 
-Example:
+Examples:
 
 ```bash
 curl "http://localhost:5000/api/search?channel=8&start_date=2026-06-11&end_date=2026-06-12&event_type=PERSON&stream=main"
 ```
 
-If you want every recording on a day, leave out `event_type`.
-
 ```bash
 curl "http://localhost:5000/api/search?channel=8&start_date=2026-06-11"
 ```
 
-## Timeline
-
 ### `GET /api/timeline`
 
-Returns recently indexed events from the local timeline store.
+Returns events from the local timeline store.
 
 Parameters:
 
@@ -71,13 +77,55 @@ curl "http://localhost:5000/api/timeline?hours=48&channel=8&event_type=PERSON"
 
 Returns one timeline entry by ID.
 
-## Debug
+### `GET /api/events/recent`
 
-### `GET /api/debug/info`
+Returns the event list used by the app dashboard.
 
-Returns configuration details for troubleshooting. This is only enabled when debug mode is on.
+Parameters:
 
-## Response Shape
+- `limit` optional, maximum number of entries
+- `channel` optional, filter to one channel
+- `event_type` optional, filter to one event type
+
+## Event Ingest And Playback
+
+### `POST /api/events/ingest`
+
+Creates a timeline entry from Home Assistant or another source.
+
+This is the relay endpoint used by the Home Assistant notification flow.
+
+### `GET /api/events/{entry_id}/clip`
+
+Returns the playable clip for a timeline event.
+
+### `GET /api/events/{entry_id}/live`
+
+Returns the live-view target for a timeline event.
+
+### `POST /api/webhook/reolink`
+
+Accepts a Reolink ONVIF webhook payload.
+
+## Live Views
+
+### `GET /api/live/{channel}/mjpeg`
+
+Returns a browser-friendly MJPEG stream for the requested channel.
+
+### `GET /app`
+
+Opens the event dashboard.
+
+### `GET /app/live`
+
+Opens the live camera page.
+
+### `GET /app/ws/events`
+
+WebSocket feed for live dashboard updates.
+
+## Response Notes
 
 Search responses include:
 
@@ -88,20 +136,10 @@ Search responses include:
 - `total_clips`
 - `clips`
 
-Each clip includes:
-
-- `timestamp`
-- `end_timestamp`
-- `duration_seconds`
-- `event_type`
-- `trigger`
-- `file_name`
-- `stream_url`
-- `download_url`
+Timeline entries and recent events include the clip URL, live URL, thumbnail URL, clip status, and camera metadata needed by the dashboard.
 
 ## Practical Notes
 
-- `PERSON` searches can return only a few events on a given day, so use a wider date range if needed.
-- The timeline is populated from search results, so search first if the timeline is empty.
+- `PERSON` and `DOORBELL` are the main event types for the mobile notification flow.
 - `channel=0` means the first camera channel.
-
+- If you are testing through Home Assistant ingress, use the app route under `/app/...` instead of a raw LAN URL.

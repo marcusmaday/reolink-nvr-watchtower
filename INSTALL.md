@@ -1,21 +1,26 @@
 # Installation
 
-## Home Assistant Add-On
+This page covers the full Home Assistant installation and notification setup.
 
-1. In Home Assistant, go to `Settings` -> `Add-ons` -> `Add-on Store`.
-2. Open the three-dot menu and choose `Repositories`.
+## 1. Add The Repository In Home Assistant
+
+In Home Assistant:
+
+1. Go to `Settings` -> `Add-ons` -> `Add-on Store`
+2. Open the three-dot menu and choose `Repositories`
 3. Add this repository:
 
 ```text
 https://github.com/marcusmaday/reolink-nvr-ha-app
 ```
 
-4. Install **Reolink Enhanced API** from the add-on store.
-5. Open the add-on configuration page.
-6. Set your NVR host, username, password, and port.
-7. Start the add-on.
+4. Install **Reolink Enhanced API**
 
-Recommended starting values:
+## 2. Configure The Add-On
+
+Open the add-on configuration and set your NVR details.
+
+Example starting values:
 
 ```yaml
 api_port: 5000
@@ -27,7 +32,7 @@ nvr_password: your_password
 nvr_ssl: false
 buffer_enabled: true
 buffer_size_seconds: 60
-clip_duration_before: 5
+clip_duration_before: 10
 clip_duration_after: 5
 clip_quality: medium
 retention_days: 7
@@ -37,50 +42,54 @@ allow_cors: false
 debug: false
 ```
 
-The `api_port` option controls the app's listening port in the add-on. If you change it, keep the add-on port mapping aligned and use the same port in the relay URL.
-`clip_quality` controls which RTSP stream is used for generated clips. `high` uses the main stream; the other values use the sub stream.
+Notes:
 
-## Local Docker
+- `api_port` is the port the app listens on inside the add-on. Leave it at `5000` unless you know you need to change it.
+- `clip_quality` controls which RTSP stream the app uses for generated clips.
+- `buffer_size_seconds` controls how much rolling clip data is kept available for pre-roll.
 
-If you want to run the service outside Home Assistant:
+Restart the add-on after saving the configuration.
 
-```bash
-docker compose up -d
-```
+## 3. Confirm The App Works
 
-The API will be available at `http://localhost:5000`.
+After the add-on starts, verify:
 
-## After Installation
+- the app loads in the Home Assistant add-on page
+- `/api/health` reports `ok`
+- `/api/device/info` shows your NVR
+- the app dashboard opens from Home Assistant
 
-1. Confirm `/api/health` returns `status: ok`.
-2. Confirm `/api/device/info` shows your NVR.
-3. Run a search for a known date range.
-4. Open `/docs` for the interactive API browser.
+## 4. Import The Notification Blueprint
 
-## Home Assistant Notifications
-
-The app is designed to work with existing Home Assistant automations. The easiest setup is to import the blueprint instead of hand-editing an automation file.
-
-Import this blueprint in Home Assistant:
+Import this blueprint into Home Assistant:
 
 ```text
 https://raw.githubusercontent.com/marcusmaday/reolink-nvr-ha-app/main/blueprints/automation/reolink_enhanced_notification.yaml
 ```
 
-Then create the automation from the blueprint and choose:
+Then create an automation from the blueprint and choose:
 
 1. Your doorbell sensor
 2. Your person sensor
-3. Your camera snapshot entity
+3. Your snapshot camera
 4. Your front door lock
-5. Your two `notify` services
-6. Your remote app base URL
+5. Your two mobile notify services
+6. Your app base URL
 
-Use placeholders for your remote Home Assistant URL. Do not hard-code a private Nabu Casa URL in shared docs.
+Use a placeholder for your remote-access URL in shared examples. Do not paste a private Nabu Casa URL into docs or screenshots.
 
-This blueprint also handles the `UNLOCK_DOOR` notification action, so you do not need a separate unlock automation when you use it.
+The blueprint handles:
 
-To keep the app timeline in sync, add this one `rest_command` block to Home Assistant `configuration.yaml` once:
+- snapshot thumbnails
+- tap-to-open event clips
+- tap-to-open live view
+- `UNLOCK_DOOR` for doorbell notifications
+
+## 5. Add The Relay Command To Home Assistant
+
+Home Assistant needs one `rest_command` block in `configuration.yaml` so it can relay events into the app timeline.
+
+Use the internal Home Assistant gateway address and the add-on port:
 
 ```yaml
 rest_command:
@@ -102,10 +111,27 @@ rest_command:
       }
 ```
 
-`APP_PORT` is the app port configured in the add-on options and defaults to `5000`. If you do not know `HA_GATEWAY_IP`, open the add-on shell and run:
+Find `HA_GATEWAY_IP` from the add-on shell:
 
 ```bash
 ip route | awk '/default/ {print $3}'
 ```
 
-Use that IP with the configured app port. This is an internal Home Assistant network address used by the add-on, not your public remote-access URL.
+`APP_PORT` is the add-on port you configured. It defaults to `5000`.
+
+After adding the block, restart Home Assistant Core or reload the automation if you already had the command in place.
+
+## 6. Open The App On Mobile
+
+For the most reliable mobile experience:
+
+- open the app from the Home Assistant dashboard button
+- or tap the notification action
+
+The app is designed for the Home Assistant companion app and remote access through Home Assistant, not for being framed inside an iframe.
+
+## Common Issues
+
+- If the app opens but shows no events, check that `rest_command.reolink_ingest_event` is present and that Home Assistant was restarted.
+- If clips are too late, make sure the add-on is updated and the buffer settings are not still at their smallest values.
+- If notifications open a browser login page, use the `homeassistant://navigate/...` link style from the blueprint.

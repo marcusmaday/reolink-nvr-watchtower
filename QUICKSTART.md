@@ -1,34 +1,8 @@
 # Quick Start
 
-Use this path if you want the service running quickly and do not need the full background on the project.
+Use this if you want the shortest path to a working setup.
 
-## 1. Set Up The NVR Connection
-
-In Home Assistant add-on settings or your local `.env`, set:
-
-```bash
-API_PORT=5000
-API_HOST=0.0.0.0
-NVR_HOST=192.168.50.42
-NVR_PORT=80
-NVR_USERNAME=admin
-NVR_PASSWORD=your_password
-NVR_SSL=false
-BUFFER_ENABLED=true
-BUFFER_SIZE_SECONDS=60
-CLIP_DURATION_BEFORE=5
-CLIP_DURATION_AFTER=5
-CLIP_QUALITY=medium
-RETENTION_DAYS=7
-MAX_STORAGE_MB=5000
-EXTERNAL_STORAGE_PATH=
-ALLOW_CORS=false
-```
-
-If you change the add-on `api_port`, keep the add-on port mapping aligned with that value and use the same port in the relay URL and in any local client URLs.
-`CLIP_QUALITY` selects the RTSP stream for generated clips. `high` uses the main stream; all other values use the sub stream.
-
-## 2. Add The Add-On Repository
+## 1. Add The Repository
 
 In Home Assistant:
 
@@ -40,57 +14,54 @@ In Home Assistant:
 https://github.com/marcusmaday/reolink-nvr-ha-app
 ```
 
-## 3. Start The Service
+## 2. Install The Add-On
 
-### Home Assistant add-on
+Install **Reolink Enhanced API**, then open its configuration and set:
 
-Install the add-on, fill in the options, and start it from the add-on page.
-
-### Local Docker
-
-```bash
-docker compose up -d
+```yaml
+api_port: 5000
+api_host: 0.0.0.0
+nvr_host: 192.168.50.42
+nvr_port: 80
+nvr_username: admin
+nvr_password: your_password
+nvr_ssl: false
+buffer_enabled: true
+buffer_size_seconds: 60
+clip_duration_before: 10
+clip_duration_after: 5
+clip_quality: medium
+retention_days: 7
+max_storage_mb: 5000
+external_storage_path: ""
+allow_cors: false
+debug: false
 ```
 
-## 4. Check That It Works
+Restart the add-on after saving.
 
-```bash
-curl http://localhost:5000/api/health
-curl http://localhost:5000/api/device/info
-curl http://localhost:5000/api/channels
-```
+## 3. Import The Blueprint
 
-## 5. Search Recordings
-
-```bash
-curl "http://localhost:5000/api/search?channel=8&start_date=2026-06-11&event_type=PERSON&stream=main"
-```
-
-If you want all recordings for a day, omit `event_type`.
-
-```bash
-curl "http://localhost:5000/api/search?channel=8&start_date=2026-06-11"
-```
-
-## 6. View The Timeline
-
-```bash
-curl "http://localhost:5000/api/timeline?hours=48&channel=8"
-```
-
-## 7. Set Up Notifications
-
-Use the blueprint instead of editing `automations.yaml` by hand:
+Import this blueprint into Home Assistant:
 
 ```text
 https://raw.githubusercontent.com/marcusmaday/reolink-nvr-ha-app/main/blueprints/automation/reolink_enhanced_notification.yaml
 ```
 
-Import it in Home Assistant, then set your sensors, lock, notification services, app base URL, and camera name.
+Create the automation from the blueprint and choose:
 
-The blueprint also handles the `UNLOCK_DOOR` action from the notification button, so it replaces the separate unlock automation.
+- doorbell sensor
+- person sensor
+- snapshot camera
+- front door lock
+- two `notify` services
+- app base URL
 
-Add this one `rest_command` block to `configuration.yaml` so the blueprint can relay the event into the app timeline:
+Use a placeholder for your remote-access URL in any shared examples.
+
+## 4. Add The Relay Command
+
+Add this to `configuration.yaml`:
 
 ```yaml
 rest_command:
@@ -112,32 +83,30 @@ rest_command:
       }
 ```
 
-`APP_PORT` is the app port configured in the add-on options and defaults to `5000`. If you do not know `HA_GATEWAY_IP`, open the add-on shell and run:
+Find `HA_GATEWAY_IP` with:
 
 ```bash
 ip route | awk '/default/ {print $3}'
 ```
 
-Use that IP with the configured app port. It is an internal Home Assistant network address, not your public remote-access URL.
+`APP_PORT` defaults to `5000`.
 
-If you are writing a manual example, keep the real remote URL out of shared examples and use a placeholder:
+Restart Home Assistant Core after adding the command.
 
-```yaml
-app_base_url: "https://YOUR_HA_REMOTE_URL/app/reolink_enhanced_api"
-app_event_url: "{{ app_base_url }}?channel=8&event_type=PERSON"
-app_live_url: "{{ app_base_url }}/live?channel=8&event_type=PERSON"
-```
+## 5. Check It
 
-The notification should:
+Open the app from the Home Assistant dashboard button and trigger a test doorbell or person event.
 
-- show the snapshot thumbnail
-- open the event in the app when tapped
-- offer `View Event Clip`
-- offer `View Live Stream` for person events
-- offer `Unlock Front Door` for doorbell events
+What you should see:
 
-## Common Questions
+- a notification with a snapshot thumbnail
+- a tap action that opens the app
+- an event clip in the app timeline
+- live view for person notifications
+- unlock for doorbell notifications
 
-- Use `channel=0` for the first NVR channel.
-- Start with `hours=48` if you are not sure when the event happened.
-- `PERSON`, `DOORBELL`, `MOTION`, `ANIMAL`, and `VEHICLE` are the supported event filters.
+## 6. If Something Is Off
+
+- No events in the app: check the `rest_command` and restart Home Assistant Core.
+- Clips start too late: make sure you are on the latest add-on version and use the current buffer defaults.
+- Mobile opens a login page: use the notification links from the blueprint, not a raw browser URL.

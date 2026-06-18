@@ -47,6 +47,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+APP_NAME = "Front Door Watch"
+APP_TAGLINE = "Recent doorbell and person events with player-first playback"
+LIVE_PAGE_TITLE = "Front Door Watch Live"
+
 APP_CONFIG: AppConfig = get_config()
 if APP_CONFIG.api.debug:
     logging.getLogger().setLevel(logging.DEBUG)
@@ -253,9 +257,9 @@ async def lifespan(app: FastAPI):
 # ─── App init ─────────────────────────────────────────────────────────────────
 
 app = FastAPI(
-    title="Reolink NVR HA App",
-    description="REST API wrapper for Reolink NVR recording search and filtering",
-    version="0.4.20",
+    title=APP_NAME,
+    description="Front door event dashboard, clip playback, and live view for a Reolink NVR",
+    version="0.4.21",
     lifespan=lifespan,
 )
 
@@ -798,8 +802,8 @@ async def root(request: Request):
     if "text/html" in accept or "application/xhtml+xml" in accept:
         return HTMLResponse(_dashboard_html())
     return {
-        "name": "Reolink NVR HA App",
-        "version": "0.4.20",
+        "name": APP_NAME,
+        "version": "0.4.21",
         "status": "running",
         "docs": "/docs",
         "health": "/api/health",
@@ -1274,7 +1278,7 @@ def _live_dashboard_html(channel: int = 8, event_type: Optional[str] = None) -> 
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Reolink Live</title>
+  <title>{LIVE_PAGE_TITLE}</title>
   <style>
     :root {{
       color-scheme: dark;
@@ -1364,7 +1368,7 @@ def _live_dashboard_html(channel: int = 8, event_type: Optional[str] = None) -> 
   <main>
     <div class="topbar">
       <div class="title">
-        <strong>Front Door Live</strong>
+        <strong>{LIVE_PAGE_TITLE}</strong>
         <span>{event_label} view • Channel {channel}</span>
       </div>
       <a class="chip" href="..">Back to events</a>
@@ -1399,7 +1403,7 @@ def _dashboard_html() -> str:
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Reolink Enhanced API</title>
+  <title>Front Door Watch</title>
     <style>
     :root {
       color-scheme: dark;
@@ -1555,7 +1559,7 @@ def _dashboard_html() -> str:
 <body>
   <header>
     <div>
-      <h1>Reolink Enhanced API</h1>
+      <h1>Front Door Watch</h1>
       <div class="meta">Recent doorbell and person events with player-first playback</div>
     </div>
     <div class="meta" id="status">Connecting…</div>
