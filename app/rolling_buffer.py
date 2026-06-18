@@ -261,11 +261,14 @@ class RollingSegmentBuffer:
             concat_list.unlink(missing_ok=True)
 
     def get_stats(self) -> dict:
+        segments = self._load_segments()
         return {
             "running": self._running,
             "channel": self.channel,
             "storage_dir": str(self.storage_dir),
             "segment_seconds": self.segment_seconds,
             "retention_seconds": self.retention_seconds,
-            "segments": len(self._load_segments()),
+            "segments": len(segments),
+            "oldest_segment": segments[0].start_time.isoformat() if segments else None,
+            "newest_segment": segments[-1].start_time.isoformat() if segments else None,
         }
