@@ -259,7 +259,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title=APP_NAME,
     description="Front door event dashboard, clip playback, and live view for a Reolink NVR",
-    version="0.4.21",
+    version="0.4.22",
     lifespan=lifespan,
 )
 
@@ -803,7 +803,7 @@ async def root(request: Request):
         return HTMLResponse(_dashboard_html())
     return {
         "name": APP_NAME,
-        "version": "0.4.21",
+        "version": "0.4.22",
         "status": "running",
         "docs": "/docs",
         "health": "/api/health",
@@ -1592,7 +1592,6 @@ def _dashboard_html() -> str:
   <script>
     const state = { events: [], filter: 'ALL', selected: null, socket: null };
     const deepLink = new URLSearchParams(window.location.search);
-    const requestedEntryId = deepLink.get('event_id') || deepLink.get('entry_id');
     const requestedEventType = (() => {
       const raw = (deepLink.get('event_type') || '').trim().toUpperCase();
       return ['PERSON', 'DOORBELL'].includes(raw) ? raw : null;
@@ -1659,11 +1658,7 @@ def _dashboard_html() -> str:
       const resp = await fetch(apiUrl('api/events/recent?limit=50'));
       const data = await resp.json();
       state.events = data.events || [];
-      if (requestedEntryId && state.events.find(e => e.entry_id === requestedEntryId)) {
-        state.selected = requestedEntryId;
-      } else if (!state.selected && state.events.length) {
-        state.selected = state.events[0].entry_id;
-      }
+      state.selected = state.events.length ? state.events[0].entry_id : null;
       render();
       if (state.selected) selectEvent(state.selected, false);
     }
