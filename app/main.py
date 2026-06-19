@@ -259,7 +259,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title=APP_NAME,
     description="Front door event dashboard, clip playback, and live view for a Reolink NVR",
-    version="0.4.23",
+    version="0.4.24",
     lifespan=lifespan,
 )
 
@@ -803,7 +803,7 @@ async def root(request: Request):
         return HTMLResponse(_dashboard_html())
     return {
         "name": APP_NAME,
-        "version": "0.4.23",
+        "version": "0.4.24",
         "status": "running",
         "docs": "/docs",
         "health": "/api/health",
@@ -1665,7 +1665,7 @@ def _dashboard_html() -> str:
     function setStatus(text) { elStatus.textContent = text; }
 
     async function loadRecent() {
-      const resp = await fetch(apiUrl('api/events/recent?limit=50'));
+      const resp = await fetch(apiUrl('api/events/recent?limit=50'), { cache: 'no-store' });
       const data = await resp.json();
       state.events = sortNewestFirst(data.events || []);
       state.selected = state.events.length ? state.events[0].entry_id : null;

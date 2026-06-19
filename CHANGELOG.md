@@ -4,6 +4,12 @@
 
 # Changelog
 
+# Changelog
+
+## 0.4.24
+
+- Disable browser caching for the dashboard recent-events fetch so the newest event loads reliably.
+
 ## 0.4.23
 
 - Sort the dashboard events client-side so the newest event always loads first.
