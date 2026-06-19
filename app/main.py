@@ -259,7 +259,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title=APP_NAME,
     description="Front door event dashboard, clip playback, and live view for a Reolink NVR",
-    version="0.4.24",
+    version="0.4.25",
     lifespan=lifespan,
 )
 
@@ -803,7 +803,7 @@ async def root(request: Request):
         return HTMLResponse(_dashboard_html())
     return {
         "name": APP_NAME,
-        "version": "0.4.24",
+        "version": "0.4.25",
         "status": "running",
         "docs": "/docs",
         "health": "/api/health",
@@ -1640,6 +1640,12 @@ def _dashboard_html() -> str:
         .replaceAll("'", '&#39;');
     }
 
+    function cacheBust(url, token) {
+      if (!url) return '';
+      const separator = url.includes('?') ? '&' : '?';
+      return `${url}${separator}v=${encodeURIComponent(token)}`;
+    }
+
     function visibleEvents() {
       const events = state.filter === 'ALL' ? state.events : state.events.filter(e => e.event_type === state.filter);
       return sortNewestFirst(events);
@@ -1679,12 +1685,16 @@ def _dashboard_html() -> str:
       state.selected = id;
       render();
       const clipUrl = entry.clip_url;
-      const snapshotUrl = entry.thumbnail_url || entry.metadata?.snapshot_url;
+      const snapshotUrl = cacheBust(entry.thumbnail_url || entry.metadata?.snapshot_url, entry.entry_id);
       if (clipUrl) {
         snapshot.hidden = true;
         player.hidden = false;
+        player.pause();
+        player.removeAttribute('src');
+        player.load();
         player.poster = snapshotUrl || '';
         player.src = clipUrl;
+        player.load();
         if (userInitiated) player.play().catch(() => {});
       } else if (snapshotUrl) {
         player.pause();

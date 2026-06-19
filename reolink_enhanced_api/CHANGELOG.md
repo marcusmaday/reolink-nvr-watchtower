@@ -6,6 +6,12 @@
 
 # Changelog
 
+# Changelog
+
+## 0.4.25
+
+- Bust cached snapshot previews and force the player to reload the newest event cleanly.
+
 ## 0.4.24
 
 - Disable browser caching for the dashboard recent-events fetch so the newest event loads reliably.
