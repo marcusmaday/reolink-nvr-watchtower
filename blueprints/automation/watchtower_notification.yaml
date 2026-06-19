@@ -1,8 +1,8 @@
 blueprint:
-  name: Reolink Enhanced Notification Actions
+  name: Watchtower Notification Actions
   description: >
     Send thumbnail-based PERSON and DOORBELL notifications, relay events into
-    the app timeline, and provide either live view or front-door unlock actions.
+    the app timeline, and provide either live view or door unlock actions.
   domain: automation
   input:
     doorbell_sensor:
@@ -48,7 +48,7 @@ blueprint:
       name: App base URL
       description: >
         The Home Assistant deep link used to open the app on phones.
-      default: "homeassistant://navigate/app/15e0e6e5_reolink_enhanced_api"
+      default: "homeassistant://navigate/app/15e0e6e5_watchtower"
       selector:
         text: {}
     notify_service_primary:
@@ -99,7 +99,7 @@ actions:
       event_timestamp: "{{ trigger.to_state.last_changed.isoformat() if trigger.to_state is not none else now().isoformat() }}"
       snapshot_file: "/config/www/tmp/doorbell_snapshot_{{ trigger.id }}.jpg"
       snapshot_url: "/local/tmp/doorbell_snapshot_{{ trigger.id }}.jpg"
-      app_path_base: "/app/15e0e6e5_reolink_enhanced_api"
+      app_path_base: "/app/15e0e6e5_watchtower"
       app_event_path: "{{ app_path_base }}?channel={{ channel }}&event_type={{ event_type }}"
       app_live_path: "{{ app_path_base }}/live?channel={{ channel }}&event_type={{ event_type }}"
       app_event_url: "{{ base_url }}?channel={{ channel }}&event_type={{ event_type }}"

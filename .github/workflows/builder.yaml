@@ -71,8 +71,8 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           # HA Supervisor expects images tagged as {image}-{arch}
           tags: |
-            ${{ env.REGISTRY }}/${{ github.repository_owner }}/reolink-nvr-enhanced-${{ matrix.arch }}:latest
-            ${{ env.REGISTRY }}/${{ github.repository_owner }}/reolink-nvr-enhanced-${{ matrix.arch }}:${{ steps.version.outputs.version }}
+            ${{ env.REGISTRY }}/${{ github.repository_owner }}/reolink-nvr-watchtower-${{ matrix.arch }}:latest
+            ${{ env.REGISTRY }}/${{ github.repository_owner }}/reolink-nvr-watchtower-${{ matrix.arch }}:${{ steps.version.outputs.version }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}

@@ -1,12 +1,8 @@
 # Changelog
 
-# Changelog
+## 0.4.26
 
-# Changelog
-
-# Changelog
-
-# Changelog
+- Rebrand the product to `Watchtower` and rename the repo and add-on slug for the larger HA migration.
 
 ## 0.4.25
 

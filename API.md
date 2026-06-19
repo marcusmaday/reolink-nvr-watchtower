@@ -1,6 +1,6 @@
 # API Reference
 
-Reolink Enhanced API exposes a small HTTP API for the event dashboard, clip playback, live view, and timeline lookup.
+Watchtower exposes a small HTTP API for the event dashboard, clip playback, live view, and timeline lookup.
 
 Base URL examples:
 
@@ -11,7 +11,7 @@ http://localhost:5000
 When the app is opened through Home Assistant ingress, the same routes are also available under:
 
 ```text
-/app/15e0e6e5_reolink_enhanced_api
+/app/15e0e6e5_watchtower
 ```
 
 ## Core Status

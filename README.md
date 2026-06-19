@@ -1,12 +1,18 @@
-# Reolink Enhanced API
+# Watchtower
 
-Reolink Enhanced API is a Home Assistant add-on and companion app for a Reolink NVR. It gives you:
+<img src="docs/images/watchtower-logo.png" alt="Watchtower logo" width="180">
 
-- a mobile-friendly event dashboard for recent doorbell and person activity
+Watchtower is a Home Assistant add-on and companion app for a Reolink NVR. It gives you:
+
+- a mobile-friendly event dashboard for recent camera activity
 - clip playback for event clips with pre-roll buffering
-- live view from the front door camera
+- live view from the selected camera
 - Home Assistant notifications with snapshot thumbnails and app links
 - a searchable recording timeline for the NVR
+
+## App Preview
+
+![Watchtower app preview](docs/images/reolink-app-example.png)
 
 ## Start Here
 
@@ -35,7 +41,7 @@ The app connects to your NVR and builds a live event experience around:
 - `ANIMAL`
 - `VEHICLE`
 
-For the front door, it can:
+For supported cameras, it can:
 
 - show a snapshot thumbnail in the notification
 - open the event clip in the app

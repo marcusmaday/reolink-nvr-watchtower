@@ -1,6 +1,6 @@
 # GitHub Actions Workflow
 
-This repository includes an automated GitHub Actions workflow that builds and publishes Docker images for the Reolink Enhanced API app.
+This repository includes an automated GitHub Actions workflow that builds and publishes Docker images for the Watchtower app.
 
 ## Build Workflow: `.github/workflows/builder.yaml`
 
@@ -30,8 +30,8 @@ The workflow automatically uses your GitHub token (`GITHUB_TOKEN`), so no additi
 
 After the workflow completes, Docker images are available at:
 ```
-ghcr.io/marcusmaday/reolink-nvr-enhanced-amd64:latest
-ghcr.io/marcusmaday/reolink-nvr-enhanced-amd64:0.2.0  # example versioned tag
+ghcr.io/marcusmaday/reolink-nvr-watchtower-amd64:latest
+ghcr.io/marcusmaday/reolink-nvr-watchtower-amd64:0.2.0  # example versioned tag
 ```
 
 ### Making images public:
@@ -40,14 +40,14 @@ By default, images may be private. To make them public:
 
 1. Go to your GitHub repository
 2. Click **Packages** (right sidebar)
-3. Find `reolink-nvr-enhanced-amd64`
+3. Find `reolink-nvr-watchtower-amd64`
 4. Click the package name
 5. Click **Package settings**
 6. Scroll down and change visibility to **Public**
 
 Or set it when pushing:
 ```bash
-docker push ghcr.io/marcusmaday/reolink-nvr-enhanced-amd64:latest
+docker push ghcr.io/marcusmaday/reolink-nvr-watchtower-amd64:latest
 ```
 
 ## Testing the workflow:
@@ -76,9 +76,9 @@ After the workflow completes:
 2. In Home Assistant, go to App Store
 3. Remove the repository if it exists
 4. Hard refresh your browser: `Ctrl+Shift+R`
-5. Re-add the repository: `https://github.com/marcusmaday/reolink-nvr-ha-app`
+5. Re-add the repository: `https://github.com/marcusmaday/reolink-nvr-watchtower`
 6. Refresh the App Store
-7. Search for "Reolink Enhanced"
+7. Search for "Watchtower"
 
 ### Need to rebuild manually?
 

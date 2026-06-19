@@ -1,13 +1,7 @@
 """
-Reolink NVR Home Assistant Enhanced API - FastAPI Backend
+Watchtower - FastAPI Backend
 
-Complete REST + WebSocket API for Reolink NVR integration with Home Assistant.
-Features:
-  - Recording search and filtering
-  - Event timeline indexing
-  - Video clip generation
-  - Real-time event streaming (WebSocket)
-  - Storage management
+Camera event dashboard, clip playback, and live view for a Reolink NVR.
 """
 
 import os
@@ -47,9 +41,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-APP_NAME = "Front Door Watch"
-APP_TAGLINE = "Recent doorbell and person events with player-first playback"
-LIVE_PAGE_TITLE = "Front Door Watch Live"
+APP_NAME = "Watchtower"
+APP_TAGLINE = "Recent camera events with player-first playback"
+LIVE_PAGE_TITLE = "Watchtower Live"
 
 APP_CONFIG: AppConfig = get_config()
 if APP_CONFIG.api.debug:
@@ -183,7 +177,7 @@ class RecentEvent(BaseModel):
 async def lifespan(app: FastAPI):
     global nvr_host, timeline_index, rolling_buffer, storage_manager
 
-    logger.info("Starting Reolink NVR HA App...")
+    logger.info("Starting Watchtower...")
     logger.info("Connecting to NVR at %s:%s", NVR_HOST, NVR_PORT)
 
     try:
@@ -237,7 +231,7 @@ async def lifespan(app: FastAPI):
 
     yield  # ← app runs here
 
-    logger.info("Shutting down Reolink NVR HA App...")
+    logger.info("Shutting down Watchtower...")
     if rolling_buffer:
         try:
             await rolling_buffer.stop()
@@ -258,8 +252,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title=APP_NAME,
-    description="Front door event dashboard, clip playback, and live view for a Reolink NVR",
-    version="0.4.25",
+    description="Camera event dashboard, clip playback, and live view for a Reolink NVR",
+    version="0.4.26",
     lifespan=lifespan,
 )
 
@@ -803,7 +797,7 @@ async def root(request: Request):
         return HTMLResponse(_dashboard_html())
     return {
         "name": APP_NAME,
-        "version": "0.4.25",
+        "version": "0.4.26",
         "status": "running",
         "docs": "/docs",
         "health": "/api/health",
@@ -1403,7 +1397,7 @@ def _dashboard_html() -> str:
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Front Door Watch</title>
+  <title>Watchtower</title>
     <style>
     :root {
       color-scheme: dark;
@@ -1559,7 +1553,7 @@ def _dashboard_html() -> str:
 <body>
   <header>
     <div>
-      <h1>Front Door Watch</h1>
+      <h1>Watchtower</h1>
       <div class="meta">Recent doorbell and person events with player-first playback</div>
     </div>
     <div class="meta" id="status">Connecting…</div>

@@ -70,7 +70,7 @@ When you are iterating on the add-on and the package version has already been pu
 
 ```bash
 ha store reload
-ha store apps update 15e0e6e5_reolink_enhanced_api
+ha store apps update 15e0e6e5_watchtower
 ```
 
 The `15e0e6e5` prefix is Home Assistant Supervisor's internal app id for this add-on. It appears in the add-on URL and in HA's internal device registry; it is not a repository setting and you normally do not edit it by hand.

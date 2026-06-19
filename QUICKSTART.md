@@ -11,12 +11,12 @@ In Home Assistant:
 3. Add:
 
 ```text
-https://github.com/marcusmaday/reolink-nvr-ha-app
+https://github.com/marcusmaday/reolink-nvr-watchtower
 ```
 
 ## 2. Install The Add-On
 
-Install **Reolink Enhanced API**, then open its configuration and set:
+Install **Watchtower**, then open its configuration and set:
 
 ```yaml
 api_port: 5000
@@ -45,7 +45,7 @@ Restart the add-on after saving.
 Import this blueprint into Home Assistant:
 
 ```text
-https://raw.githubusercontent.com/marcusmaday/reolink-nvr-ha-app/main/blueprints/automation/reolink_enhanced_notification.yaml
+https://raw.githubusercontent.com/marcusmaday/reolink-nvr-watchtower/main/blueprints/automation/watchtower_notification.yaml
 ```
 
 Create the automation from the blueprint and choose:
