@@ -2,6 +2,12 @@
 
 # Changelog
 
+# Changelog
+
+## 0.4.23
+
+- Sort the dashboard events client-side so the newest event always loads first.
+
 ## 0.4.22
 
 - Force the dashboard to open the newest event on load.

@@ -259,7 +259,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title=APP_NAME,
     description="Front door event dashboard, clip playback, and live view for a Reolink NVR",
-    version="0.4.22",
+    version="0.4.23",
     lifespan=lifespan,
 )
 
@@ -803,7 +803,7 @@ async def root(request: Request):
         return HTMLResponse(_dashboard_html())
     return {
         "name": APP_NAME,
-        "version": "0.4.22",
+        "version": "0.4.23",
         "status": "running",
         "docs": "/docs",
         "health": "/api/health",
@@ -1622,6 +1622,15 @@ def _dashboard_html() -> str:
       try { return new Date(ts).toLocaleString(); } catch (e) { return ts; }
     }
 
+    function sortNewestFirst(events) {
+      return [...events].sort((a, b) => {
+        const aTime = Date.parse(a.timestamp || '') || 0;
+        const bTime = Date.parse(b.timestamp || '') || 0;
+        if (bTime !== aTime) return bTime - aTime;
+        return String(b.entry_id || '').localeCompare(String(a.entry_id || ''));
+      });
+    }
+
     function escapeHtml(value) {
       return String(value ?? '')
         .replaceAll('&', '&amp;')
@@ -1632,7 +1641,8 @@ def _dashboard_html() -> str:
     }
 
     function visibleEvents() {
-      return state.filter === 'ALL' ? state.events : state.events.filter(e => e.event_type === state.filter);
+      const events = state.filter === 'ALL' ? state.events : state.events.filter(e => e.event_type === state.filter);
+      return sortNewestFirst(events);
     }
 
     function render() {
@@ -1657,7 +1667,7 @@ def _dashboard_html() -> str:
     async function loadRecent() {
       const resp = await fetch(apiUrl('api/events/recent?limit=50'));
       const data = await resp.json();
-      state.events = data.events || [];
+      state.events = sortNewestFirst(data.events || []);
       state.selected = state.events.length ? state.events[0].entry_id : null;
       render();
       if (state.selected) selectEvent(state.selected, false);
@@ -1724,7 +1734,7 @@ def _dashboard_html() -> str:
       socket.onmessage = (event) => {
         const msg = JSON.parse(event.data);
         if (msg.type === 'event' && msg.event) {
-          state.events = [msg.event, ...state.events.filter(e => e.entry_id !== msg.event.entry_id)];
+          state.events = sortNewestFirst([msg.event, ...state.events.filter(e => e.entry_id !== msg.event.entry_id)]);
           state.selected = msg.event.entry_id;
           render();
           selectEvent(msg.event.entry_id, false);
