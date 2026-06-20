@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.4.31
+
+- Route live links through the app root with `?view=live` so phones stay inside Watchtower without hitting ingress auth edge cases.
+- Keep the app's live page header branded as Watchtower only.
+
+## 0.4.30
+
+- Keep live view inside Watchtower by linking event details and notifications to the app's `/app/live` route.
+- Remove the standalone live label from the live page header.
+
+## 0.4.29
+
+- Point the live notification action at the Home Assistant camera dashboard instead of the app live route.
+- Remove the standalone "Live" label from the live page header.
+
 ## 0.4.28
 
 - Add a lightweight rolling-buffer watchdog that restarts the recorder task if it stops.

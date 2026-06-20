@@ -105,9 +105,9 @@ actions:
               snapshot_url: "/local/tmp/doorbell_snapshot_{{ trigger.id }}.jpg"
               app_path_base: "/app/15e0e6e5_watchtower"
               app_event_path: "{{ app_path_base }}?channel={{ channel }}&event_type={{ event_type }}"
-              app_live_path: "{{ app_path_base }}/live?channel={{ channel }}&event_type={{ event_type }}"
+              app_live_path: "/app?view=live&channel={{ channel }}&event_type={{ event_type }}"
               app_event_url: "{{ base_url }}?channel={{ channel }}&event_type={{ event_type }}"
-              app_live_url: "{{ base_url }}/live?channel={{ channel }}&event_type={{ event_type }}"
+              app_live_url: "{{ base_url }}?view=live&channel={{ channel }}&event_type={{ event_type }}"
               notif_title: "🔔 Doorbell"
               msg: "Someone is at the door!"
           - action: camera.snapshot
@@ -174,9 +174,9 @@ actions:
               snapshot_url: "/local/tmp/doorbell_snapshot_{{ trigger.id }}.jpg"
               app_path_base: "/app/15e0e6e5_watchtower"
               app_event_path: "{{ app_path_base }}?channel={{ channel }}&event_type={{ event_type }}"
-              app_live_path: "{{ app_path_base }}/live?channel={{ channel }}&event_type={{ event_type }}"
+              app_live_path: "/app?view=live&channel={{ channel }}&event_type={{ event_type }}"
               app_event_url: "{{ base_url }}?channel={{ channel }}&event_type={{ event_type }}"
-              app_live_url: "{{ base_url }}/live?channel={{ channel }}&event_type={{ event_type }}"
+              app_live_url: "{{ base_url }}?view=live&channel={{ channel }}&event_type={{ event_type }}"
               notif_title: "👤 Person Detected"
               msg: "Person detected at the front door."
           - action: camera.snapshot

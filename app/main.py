@@ -43,7 +43,7 @@ logger = logging.getLogger(__name__)
 
 APP_NAME = "Watchtower"
 APP_TAGLINE = "Recent camera events with player-first playback"
-LIVE_PAGE_TITLE = "Watchtower Live"
+LIVE_PAGE_TITLE = "Watchtower"
 
 APP_CONFIG: AppConfig = get_config()
 if APP_CONFIG.api.debug:
@@ -297,7 +297,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title=APP_NAME,
     description="Camera event dashboard, clip playback, and live view for a Reolink NVR",
-    version="0.4.28",
+    version="0.4.31",
     lifespan=lifespan,
 )
 
@@ -340,7 +340,7 @@ def _timeline_entry_to_recent(entry: TimelineEntry) -> dict[str, Any]:
     clip_source = entry.clip_path or metadata.get("clip_url") or metadata.get("download_url") or metadata.get("stream_url")
     live_source = metadata.get("live_url")
     clip_url = f"api/events/{entry.entry_id}/clip" if clip_source else None
-    live_url = f"api/events/{entry.entry_id}/live" if live_source else None
+    live_url = live_source or None
     thumbnail_url = entry.thumbnail_path or metadata.get("thumbnail_url") or metadata.get("snapshot_url")
     return {
         "entry_id": entry.entry_id,
@@ -841,7 +841,7 @@ async def root(request: Request):
         return HTMLResponse(_dashboard_html())
     return {
         "name": APP_NAME,
-        "version": "0.4.28",
+        "version": "0.4.31",
         "status": "running",
         "docs": "/docs",
         "health": "/api/health",
@@ -1310,7 +1310,8 @@ async def get_live_mjpeg(channel: int, stream: str = Query("sub", description="S
 
 
 def _live_dashboard_html(channel: int = 8, event_type: Optional[str] = None) -> str:
-    event_label = html.escape(event_type) if event_type else "Live"
+    event_label = html.escape(event_type) if event_type else ""
+    subtitle = f"{event_label} • Channel {channel}" if event_label else f"Channel {channel}"
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -1407,7 +1408,7 @@ def _live_dashboard_html(channel: int = 8, event_type: Optional[str] = None) -> 
     <div class="topbar">
       <div class="title">
         <strong>{LIVE_PAGE_TITLE}</strong>
-        <span>{event_label} view • Channel {channel}</span>
+        <span>{subtitle}</span>
       </div>
       <a class="chip" href="..">Back to events</a>
     </div>
@@ -1752,7 +1753,7 @@ def _dashboard_html() -> str:
         </div>
         ${entry.message && entry.message !== entry.title ? `<div class="detail-note">${escapeHtml(entry.message)}</div>` : ''}
         <div class="row">
-          ${entry.live_url ? `<a class="chip" href="${entry.live_url}" target="_blank" rel="noreferrer">Open live</a>` : ''}
+          ${entry.live_url ? `<a class="chip" href="${entry.live_url}">Open live</a>` : ''}
         </div>
       `;
     }
@@ -1803,7 +1804,16 @@ def _dashboard_html() -> str:
 
 @app.get("/app", response_class=HTMLResponse, summary="Open the event dashboard")
 @app.get("/app/", response_class=HTMLResponse, include_in_schema=False)
-async def app_dashboard():
+async def app_dashboard(
+    request: Request,
+    view: Optional[str] = Query(None, description="Optional app view: 'live'"),
+    channel: int = Query(ROLLING_BUFFER_CHANNEL, description="Camera channel number"),
+    event_type: Optional[str] = Query(None),
+):
+    if view and view.strip().lower() == "live":
+        if channel < 0 or (nvr_host and channel >= nvr_host.num_channels):
+            raise HTTPException(status_code=400, detail="Invalid channel")
+        return HTMLResponse(_live_dashboard_html(channel=channel, event_type=event_type))
     return HTMLResponse(_dashboard_html())
 
 
