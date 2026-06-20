@@ -28,8 +28,8 @@ nvr_password: your_password
 nvr_ssl: false
 buffer_enabled: true
 buffer_size_seconds: 60
-clip_duration_before: 10
-clip_duration_after: 5
+clip_duration_before: 1
+clip_duration_after: 15
 clip_quality: medium
 retention_days: 7
 max_storage_mb: 5000

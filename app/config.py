@@ -85,8 +85,8 @@ def get_config() -> AppConfig:
     # ─── Video Buffer Configuration ───
     buffer_enabled = os.getenv("BUFFER_ENABLED", "true").lower() == "true"
     buffer_size_seconds = int(os.getenv("BUFFER_SIZE_SECONDS", "60"))
-    clip_duration_before = int(os.getenv("CLIP_DURATION_BEFORE", "5"))
-    clip_duration_after = int(os.getenv("CLIP_DURATION_AFTER", "5"))
+    clip_duration_before = int(os.getenv("CLIP_DURATION_BEFORE", "1"))
+    clip_duration_after = int(os.getenv("CLIP_DURATION_AFTER", "15"))
     clip_quality = os.getenv("CLIP_QUALITY", "medium")
 
     video_buffer_config = VideoBufferConfig(

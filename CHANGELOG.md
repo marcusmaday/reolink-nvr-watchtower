@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.28
+
+- Add a lightweight rolling-buffer watchdog that restarts the recorder task if it stops.
+- Keep the rolling recorder logs readable by suppressing ffmpeg progress spam.
+
+## 0.4.27
+
+- Respect the configured clip window exactly instead of forcing a 10-second pre-roll floor.
+- Silence ffmpeg stats spam from the rolling recorder.
+- Align the add-on defaults with the current 1 second before / 15 second after setup.
+
 ## 0.4.26
 
 - Rebrand the product to `Watchtower` and rename the repo and add-on slug for the larger HA migration.

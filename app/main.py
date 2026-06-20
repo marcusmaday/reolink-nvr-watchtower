@@ -64,7 +64,7 @@ LOCAL_CLIP_ENABLED = APP_CONFIG.video_buffer.enabled
 CLIP_QUALITY = APP_CONFIG.video_buffer.clip_quality.lower()
 LOCAL_CLIP_SECONDS = max(
     APP_CONFIG.video_buffer.clip_duration_before + APP_CONFIG.video_buffer.clip_duration_after,
-    int(os.getenv("LOCAL_CLIP_SECONDS", "12")),
+    int(os.getenv("LOCAL_CLIP_SECONDS", "0")),
     1,
 )
 BUFFER_RETENTION_SECONDS = max(
@@ -74,15 +74,28 @@ BUFFER_RETENTION_SECONDS = max(
 FFMPEG_BIN = os.getenv("FFMPEG_BIN", "ffmpeg")
 ROLLING_BUFFER_CHANNEL = int(os.getenv("ROLLING_BUFFER_CHANNEL", "8"))
 ROLLING_SEGMENT_SECONDS = int(os.getenv("ROLLING_SEGMENT_SECONDS", "2"))
-CLIP_DURATION_BEFORE = max(APP_CONFIG.video_buffer.clip_duration_before, 10)
-CLIP_DURATION_AFTER = max(APP_CONFIG.video_buffer.clip_duration_after, 5)
+CLIP_DURATION_BEFORE = max(APP_CONFIG.video_buffer.clip_duration_before, 1)
+CLIP_DURATION_AFTER = max(APP_CONFIG.video_buffer.clip_duration_after, 1)
 BUFFER_CLIP_RETRY_ATTEMPTS = max(int(os.getenv("BUFFER_CLIP_RETRY_ATTEMPTS", "6")), 1)
 BUFFER_CLIP_RETRY_DELAY_SECONDS = max(float(os.getenv("BUFFER_CLIP_RETRY_DELAY_SECONDS", "1")), 0.1)
+ROLLING_BUFFER_MONITOR_INTERVAL_SECONDS = max(
+    int(os.getenv("ROLLING_BUFFER_MONITOR_INTERVAL_SECONDS", "60")),
+    30,
+)
 CLIPS_DIRECTORY = Path(APP_CONFIG.storage.clips_directory)
 INDEX_FILE = APP_CONFIG.storage.index_file
 RETENTION_DAYS = APP_CONFIG.storage.retention_days
 MAX_STORAGE_MB = APP_CONFIG.storage.max_storage_mb
 EXTERNAL_STORAGE_PATH = APP_CONFIG.storage.external_storage_path
+
+logger.info(
+    "Clip timing configured: before=%ss after=%ss local_clip=%ss buffer_retries=%d delay=%ss",
+    CLIP_DURATION_BEFORE,
+    CLIP_DURATION_AFTER,
+    LOCAL_CLIP_SECONDS,
+    BUFFER_CLIP_RETRY_ATTEMPTS,
+    BUFFER_CLIP_RETRY_DELAY_SECONDS,
+)
 
 # Global NVR host instance
 nvr_host: Optional[Host] = None
@@ -90,6 +103,7 @@ timeline_index: Optional[TimelineIndex] = None
 ui_clients: list[WebSocket] = []
 clip_tasks: set[asyncio.Task] = set()
 rolling_buffer: Optional[RollingSegmentBuffer] = None
+rolling_buffer_monitor_task: Optional[asyncio.Task] = None
 storage_manager: Optional[StorageManager] = None
 
 
@@ -171,11 +185,31 @@ class RecentEvent(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+async def _rolling_buffer_monitor_loop() -> None:
+    while True:
+        await asyncio.sleep(ROLLING_BUFFER_MONITOR_INTERVAL_SECONDS)
+        if not rolling_buffer:
+            continue
+        try:
+            if rolling_buffer.is_running():
+                continue
+            logger.warning(
+                "Rolling buffer monitor detected a stopped recorder for channel %d; restarting",
+                ROLLING_BUFFER_CHANNEL,
+            )
+            await rolling_buffer.restart()
+            logger.info("Rolling buffer restarted for channel %d", ROLLING_BUFFER_CHANNEL)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.error("Rolling buffer monitor error: %s", e)
+
+
 # ─── Lifespan (startup / shutdown) ───────────────────────────────────────────
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global nvr_host, timeline_index, rolling_buffer, storage_manager
+    global nvr_host, timeline_index, rolling_buffer, rolling_buffer_monitor_task, storage_manager
 
     logger.info("Starting Watchtower...")
     logger.info("Connecting to NVR at %s:%s", NVR_HOST, NVR_PORT)
@@ -229,9 +263,19 @@ async def lifespan(app: FastAPI):
             logger.error("Failed to start rolling buffer: %s", e)
             rolling_buffer = None
 
+    if rolling_buffer:
+        rolling_buffer_monitor_task = asyncio.create_task(_rolling_buffer_monitor_loop())
+
     yield  # ← app runs here
 
     logger.info("Shutting down Watchtower...")
+    if rolling_buffer_monitor_task:
+        rolling_buffer_monitor_task.cancel()
+        try:
+            await rolling_buffer_monitor_task
+        except asyncio.CancelledError:
+            pass
+        rolling_buffer_monitor_task = None
     if rolling_buffer:
         try:
             await rolling_buffer.stop()
@@ -253,7 +297,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title=APP_NAME,
     description="Camera event dashboard, clip playback, and live view for a Reolink NVR",
-    version="0.4.26",
+    version="0.4.28",
     lifespan=lifespan,
 )
 
@@ -797,7 +841,7 @@ async def root(request: Request):
         return HTMLResponse(_dashboard_html())
     return {
         "name": APP_NAME,
-        "version": "0.4.26",
+        "version": "0.4.28",
         "status": "running",
         "docs": "/docs",
         "health": "/api/health",

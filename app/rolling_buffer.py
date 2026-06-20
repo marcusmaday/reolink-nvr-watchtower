@@ -67,6 +67,23 @@ class RollingSegmentBuffer:
                 pass
         logger.info("Rolling buffer stopped for channel %d", self.channel)
 
+    def is_running(self) -> bool:
+        return self._running and self._task is not None and not self._task.done()
+
+    async def restart(self):
+        self._running = False
+        if self._task:
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                pass
+        self._task = None
+        self._running = False
+        await self.start()
+
     async def _record_loop(self):
         assert self._rtsp_url
         while self._running:
@@ -75,6 +92,7 @@ class RollingSegmentBuffer:
                 "-hide_banner",
                 "-loglevel",
                 "info",
+                "-nostats",
                 "-rtsp_transport",
                 "tcp",
                 "-fflags",
@@ -142,7 +160,12 @@ class RollingSegmentBuffer:
                 break
             text = line.decode("utf-8", "ignore").rstrip()
             if text:
-                logger.info("Rolling recorder ffmpeg[%d]: %s", self.channel, text)
+                if text.startswith("frame="):
+                    continue
+                if "Opening '" in text or "Error" in text or "error" in text.lower():
+                    logger.info("Rolling recorder ffmpeg[%d]: %s", self.channel, text)
+                else:
+                    logger.debug("Rolling recorder ffmpeg[%d]: %s", self.channel, text)
 
     async def _resolve_rtsp_url(self) -> Optional[str]:
         if hasattr(self.nvr_client, "get_rtsp_url"):

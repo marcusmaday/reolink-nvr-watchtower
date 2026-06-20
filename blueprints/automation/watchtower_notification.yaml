@@ -91,63 +91,42 @@ actions:
             target:
               entity_id: !input front_door_lock
 
-  - variables:
-      channel: !input camera_channel
-      base_url: !input app_base_url
-      cam_name: !input camera_name
-      event_type: "{{ 'DOORBELL' if trigger.id == 'doorbell' else 'PERSON' }}"
-      event_timestamp: "{{ trigger.to_state.last_changed.isoformat() if trigger.to_state is not none else now().isoformat() }}"
-      snapshot_file: "/config/www/tmp/doorbell_snapshot_{{ trigger.id }}.jpg"
-      snapshot_url: "/local/tmp/doorbell_snapshot_{{ trigger.id }}.jpg"
-      app_path_base: "/app/15e0e6e5_watchtower"
-      app_event_path: "{{ app_path_base }}?channel={{ channel }}&event_type={{ event_type }}"
-      app_live_path: "{{ app_path_base }}/live?channel={{ channel }}&event_type={{ event_type }}"
-      app_event_url: "{{ base_url }}?channel={{ channel }}&event_type={{ event_type }}"
-      app_live_url: "{{ base_url }}/live?channel={{ channel }}&event_type={{ event_type }}"
-      notif_title: "{{ 'Doorbell' if trigger.id == 'doorbell' else 'Person detected' }}"
-      msg: >-
-        {{ 'Someone is at the door.' if trigger.id == 'doorbell' else 'Person detected at the front door.' }}
-
-  - choose:
       - conditions:
           - condition: template
-            value_template: "{{ trigger.id in ['doorbell', 'person'] }}"
+            value_template: "{{ trigger.id == 'doorbell' }}"
         sequence:
+          - variables:
+              channel: !input camera_channel
+              base_url: !input app_base_url
+              cam_name: !input camera_name
+              event_type: "DOORBELL"
+              event_timestamp: "{{ trigger.to_state.last_changed.isoformat() if trigger.to_state is not none else now().isoformat() }}"
+              snapshot_file: "/config/www/tmp/doorbell_snapshot_{{ trigger.id }}.jpg"
+              snapshot_url: "/local/tmp/doorbell_snapshot_{{ trigger.id }}.jpg"
+              app_path_base: "/app/15e0e6e5_watchtower"
+              app_event_path: "{{ app_path_base }}?channel={{ channel }}&event_type={{ event_type }}"
+              app_live_path: "{{ app_path_base }}/live?channel={{ channel }}&event_type={{ event_type }}"
+              app_event_url: "{{ base_url }}?channel={{ channel }}&event_type={{ event_type }}"
+              app_live_url: "{{ base_url }}/live?channel={{ channel }}&event_type={{ event_type }}"
+              notif_title: "🔔 Doorbell"
+              msg: "Someone is at the door!"
           - action: camera.snapshot
             target:
               entity_id: !input snapshot_camera
             data:
               filename: "{{ snapshot_file }}"
-
-  - delay: "00:00:01"
-
-  - choose:
-      - conditions:
-          - condition: template
-            value_template: "{{ trigger.id in ['doorbell', 'person'] }}"
-        sequence:
-  - action: rest_command.reolink_ingest_event
-    data:
-      event_type: "{{ event_type }}"
-      channel: "{{ channel }}"
-      timestamp: "{{ event_timestamp }}"
-      camera_name: "{{ cam_name }}"
-      snapshot_url: "{{ snapshot_url }}"
-      live_url: "{{ app_live_path }}"
-      title: "{{ notif_title }}"
-      message: "{{ msg }}"
-      source: "home_assistant"
-
-  - choose:
-      - conditions:
-          - condition: template
-            value_template: "{{ trigger.id == 'unlock_door' }}"
-        sequence: []
-
-      - conditions:
-          - condition: template
-            value_template: "{{ trigger.id == 'doorbell' }}"
-        sequence:
+          - delay: "00:00:01"
+          - action: rest_command.reolink_ingest_event
+            data:
+              event_type: "{{ event_type }}"
+              channel: "{{ channel }}"
+              timestamp: "{{ event_timestamp }}"
+              camera_name: "{{ cam_name }}"
+              snapshot_url: "{{ snapshot_url }}"
+              live_url: "{{ app_live_path }}"
+              title: "{{ notif_title }}"
+              message: "{{ msg }}"
+              source: "home_assistant"
           - action: !input notify_service_primary
             data:
               title: "{{ notif_title }}"
@@ -185,6 +164,38 @@ actions:
           - condition: template
             value_template: "{{ trigger.id == 'person' }}"
         sequence:
+          - variables:
+              channel: !input camera_channel
+              base_url: !input app_base_url
+              cam_name: !input camera_name
+              event_type: "PERSON"
+              event_timestamp: "{{ trigger.to_state.last_changed.isoformat() if trigger.to_state is not none else now().isoformat() }}"
+              snapshot_file: "/config/www/tmp/doorbell_snapshot_{{ trigger.id }}.jpg"
+              snapshot_url: "/local/tmp/doorbell_snapshot_{{ trigger.id }}.jpg"
+              app_path_base: "/app/15e0e6e5_watchtower"
+              app_event_path: "{{ app_path_base }}?channel={{ channel }}&event_type={{ event_type }}"
+              app_live_path: "{{ app_path_base }}/live?channel={{ channel }}&event_type={{ event_type }}"
+              app_event_url: "{{ base_url }}?channel={{ channel }}&event_type={{ event_type }}"
+              app_live_url: "{{ base_url }}/live?channel={{ channel }}&event_type={{ event_type }}"
+              notif_title: "👤 Person Detected"
+              msg: "Person detected at the front door."
+          - action: camera.snapshot
+            target:
+              entity_id: !input snapshot_camera
+            data:
+              filename: "{{ snapshot_file }}"
+          - delay: "00:00:01"
+          - action: rest_command.reolink_ingest_event
+            data:
+              event_type: "{{ event_type }}"
+              channel: "{{ channel }}"
+              timestamp: "{{ event_timestamp }}"
+              camera_name: "{{ cam_name }}"
+              snapshot_url: "{{ snapshot_url }}"
+              live_url: "{{ app_live_path }}"
+              title: "{{ notif_title }}"
+              message: "{{ msg }}"
+              source: "home_assistant"
           - action: !input notify_service_primary
             data:
               title: "{{ notif_title }}"
