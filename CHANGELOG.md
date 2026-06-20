@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.4.35
+
+- Delay buffered clip finalization until the full before/after window has elapsed so partial clips do not get finalized early.
+- Reduce rolling-recorder ffmpeg logging to only surface warnings and errors.
+
+## 0.4.33
+
+- Delay buffered clip finalization until the full before/after window has elapsed so partial clips do not get finalized early.
+
+## 0.4.32
+
+- Make the notification live link point at the app's dedicated `/live` route instead of the query-based live view.
+- Add a short dedupe window so the webhook and HA relay merge into one timeline event instead of creating duplicates.
+
 ## 0.4.31
 
 - Route live links through the app root with `?view=live` so phones stay inside Watchtower without hitting ingress auth edge cases.

@@ -91,7 +91,7 @@ class RollingSegmentBuffer:
                 self.ffmpeg_bin,
                 "-hide_banner",
                 "-loglevel",
-                "info",
+                "warning",
                 "-nostats",
                 "-rtsp_transport",
                 "tcp",
@@ -162,10 +162,9 @@ class RollingSegmentBuffer:
             if text:
                 if text.startswith("frame="):
                     continue
-                if "Opening '" in text or "Error" in text or "error" in text.lower():
+                lowered = text.lower()
+                if "error" in lowered or "warn" in lowered or "fail" in lowered:
                     logger.info("Rolling recorder ffmpeg[%d]: %s", self.channel, text)
-                else:
-                    logger.debug("Rolling recorder ffmpeg[%d]: %s", self.channel, text)
 
     async def _resolve_rtsp_url(self) -> Optional[str]:
         if hasattr(self.nvr_client, "get_rtsp_url"):

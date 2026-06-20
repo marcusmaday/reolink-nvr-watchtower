@@ -82,6 +82,7 @@ ROLLING_BUFFER_MONITOR_INTERVAL_SECONDS = max(
     int(os.getenv("ROLLING_BUFFER_MONITOR_INTERVAL_SECONDS", "60")),
     30,
 )
+EVENT_DEDUPE_WINDOW_SECONDS = max(int(os.getenv("EVENT_DEDUPE_WINDOW_SECONDS", "8")), 1)
 CLIPS_DIRECTORY = Path(APP_CONFIG.storage.clips_directory)
 INDEX_FILE = APP_CONFIG.storage.index_file
 RETENTION_DAYS = APP_CONFIG.storage.retention_days
@@ -89,12 +90,13 @@ MAX_STORAGE_MB = APP_CONFIG.storage.max_storage_mb
 EXTERNAL_STORAGE_PATH = APP_CONFIG.storage.external_storage_path
 
 logger.info(
-    "Clip timing configured: before=%ss after=%ss local_clip=%ss buffer_retries=%d delay=%ss",
+    "Clip timing configured: before=%ss after=%ss local_clip=%ss buffer_retries=%d delay=%ss dedupe_window=%ss",
     CLIP_DURATION_BEFORE,
     CLIP_DURATION_AFTER,
     LOCAL_CLIP_SECONDS,
     BUFFER_CLIP_RETRY_ATTEMPTS,
     BUFFER_CLIP_RETRY_DELAY_SECONDS,
+    EVENT_DEDUPE_WINDOW_SECONDS,
 )
 
 # Global NVR host instance
@@ -297,7 +299,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title=APP_NAME,
     description="Camera event dashboard, clip playback, and live view for a Reolink NVR",
-    version="0.4.31",
+    version="0.4.35",
     lifespan=lifespan,
 )
 
@@ -333,6 +335,68 @@ def _normalize_datetime_for_compare(value: datetime) -> datetime:
     if value.tzinfo is not None:
         return value.astimezone(timezone.utc).replace(tzinfo=None)
     return value
+
+
+def _current_datetime_like(value: datetime) -> datetime:
+    if value.tzinfo is not None:
+        return datetime.now(timezone.utc).replace(tzinfo=None)
+    return datetime.now()
+
+
+def _pick_earlier_timestamp(first: datetime, second: datetime) -> datetime:
+    return first if _normalize_datetime_for_compare(first) <= _normalize_datetime_for_compare(second) else second
+
+
+def _merge_timeline_entries(existing: TimelineEntry, incoming: TimelineEntry) -> TimelineEntry:
+    merged_metadata = dict(existing.metadata or {})
+    incoming_metadata = incoming.metadata or {}
+
+    existing_status = merged_metadata.get("clip_status")
+    incoming_status = incoming_metadata.get("clip_status")
+    status_rank = {"failed": 0, "pending": 1, "generating": 2, "ready": 3}
+    if status_rank.get(incoming_status, -1) > status_rank.get(existing_status, -1):
+        merged_metadata["clip_status"] = incoming_status
+    elif existing_status is None and incoming_status is not None:
+        merged_metadata["clip_status"] = incoming_status
+
+    for key, value in incoming_metadata.items():
+        if key == "clip_status" or value in (None, "", [], {}):
+            continue
+        if key in {"clip_file", "clip_source", "clip_url", "download_url", "stream_url", "live_url", "duration_seconds"}:
+            if status_rank.get(incoming_status, -1) >= status_rank.get(existing_status, -1):
+                merged_metadata[key] = value
+            continue
+        merged_metadata[key] = value
+
+    return TimelineEntry(
+        entry_id=existing.entry_id,
+        timestamp=_pick_earlier_timestamp(existing.timestamp, incoming.timestamp),
+        channel=existing.channel,
+        event_type=existing.event_type,
+        clip_path=existing.clip_path or incoming.clip_path,
+        thumbnail_path=existing.thumbnail_path or incoming.thumbnail_path,
+        metadata=merged_metadata,
+    )
+
+
+def _upsert_or_merge_timeline_entry(entry: TimelineEntry) -> tuple[TimelineEntry, bool]:
+    if not timeline_index:
+        return entry, True
+
+    match = timeline_index.find_recent_entry(
+        channel=entry.channel,
+        event_type=entry.event_type,
+        timestamp=entry.timestamp,
+        window_seconds=EVENT_DEDUPE_WINDOW_SECONDS,
+    )
+
+    if match and match.entry_id != entry.entry_id:
+        merged_entry = _merge_timeline_entries(match, entry)
+        timeline_index.upsert_entry(merged_entry)
+        return merged_entry, False
+
+    timeline_index.upsert_entry(entry)
+    return entry, True
 
 
 def _timeline_entry_to_recent(entry: TimelineEntry) -> dict[str, Any]:
@@ -429,7 +493,7 @@ def _create_event_entry(
     message: Optional[str] = None,
     snapshot_url: Optional[str] = None,
     live_url: Optional[str] = None,
-) -> TimelineEntry:
+) -> tuple[TimelineEntry, bool]:
     event_timestamp = timestamp or datetime.now()
     entry = TimelineEntry(
         entry_id=f"{channel}_{event_timestamp.isoformat()}_{event_type}",
@@ -449,8 +513,7 @@ def _create_event_entry(
             "clip_source": "local_rtsp",
         },
     )
-    timeline_index.upsert_entry(entry)
-    return entry
+    return _upsert_or_merge_timeline_entry(entry)
 
 
 async def _broadcast_recent_event(entry: TimelineEntry):
@@ -603,6 +666,17 @@ async def _generate_buffered_event_clip(entry: TimelineEntry) -> None:
         logger.debug("Rolling buffer stats before clip for %s: %s", entry.entry_id, rolling_buffer.get_stats())
     except Exception:
         pass
+
+    window_ready_at = _normalize_datetime_for_compare(clip_end)
+    current_time = _normalize_datetime_for_compare(_current_datetime_like(clip_end))
+    if current_time < window_ready_at:
+        wait_seconds = max((window_ready_at - current_time).total_seconds(), 0.0)
+        logger.debug(
+            "Waiting %.1fs for buffered window to complete before stitching %s",
+            wait_seconds,
+            entry.entry_id,
+        )
+        await asyncio.sleep(wait_seconds)
 
     generating_metadata = dict(entry.metadata or {})
     generating_metadata["clip_status"] = "generating"
@@ -841,7 +915,7 @@ async def root(request: Request):
         return HTMLResponse(_dashboard_html())
     return {
         "name": APP_NAME,
-        "version": "0.4.31",
+        "version": "0.4.35",
         "status": "running",
         "docs": "/docs",
         "health": "/api/health",
@@ -1109,10 +1183,10 @@ async def ingest_event(payload: EventIngestRequest):
             "clip_source": clip_source,
         },
     )
-    timeline_index.upsert_entry(entry)
+    entry, created = _upsert_or_merge_timeline_entry(entry)
     await _broadcast_recent_event(entry)
 
-    if not clip_url:
+    if created and not clip_url:
         _schedule_clip_generation(entry)
 
     return {
@@ -1139,7 +1213,7 @@ async def receive_reolink_webhook(request: Request):
     if not parsed_events:
         return {"status": "ignored", "detail": "No supported event types found"}
 
-    created: list[dict[str, Any]] = []
+    created_events: list[dict[str, Any]] = []
     for parsed in parsed_events:
         if event_channels and parsed["channel"] not in event_channels:
             continue
@@ -1148,7 +1222,7 @@ async def receive_reolink_webhook(request: Request):
             camera_name = nvr_host.camera_name(parsed["channel"])
         except Exception:
             camera_name = None
-        entry = _create_event_entry(
+        entry, is_new = _create_event_entry(
             channel=parsed["channel"],
             event_type=parsed["event_type"],
             camera_name=camera_name,
@@ -1157,13 +1231,14 @@ async def receive_reolink_webhook(request: Request):
             message=f"{parsed['event_type'].title()} detected on channel {parsed['channel']}",
         )
         await _broadcast_recent_event(entry)
-        _schedule_clip_generation(entry)
-        created.append(_timeline_entry_to_recent(entry))
+        if is_new:
+            _schedule_clip_generation(entry)
+        created_events.append(_timeline_entry_to_recent(entry))
 
-    if not created:
+    if not created_events:
         return {"status": "ignored", "detail": "No matching channels found"}
 
-    return {"status": "accepted", "events": created}
+    return {"status": "accepted", "events": created_events}
 
 
 @app.get("/api/timeline/{entry_id}", summary="Get a single timeline entry")
@@ -1410,7 +1485,7 @@ def _live_dashboard_html(channel: int = 8, event_type: Optional[str] = None) -> 
         <strong>{LIVE_PAGE_TITLE}</strong>
         <span>{subtitle}</span>
       </div>
-      <a class="chip" href="..">Back to events</a>
+      <a class="chip" href="/app">Back to events</a>
     </div>
     <div class="viewer">
       <img src="api/live/{channel}/mjpeg" alt="Live stream for channel {channel}">
@@ -1420,7 +1495,7 @@ def _live_dashboard_html(channel: int = 8, event_type: Optional[str] = None) -> 
       <div>If the stream is unavailable, reload after a few seconds.</div>
     </div>
     <div class="actions">
-      <a class="chip" href="..">Events</a>
+      <a class="chip" href="/app">Events</a>
       <a class="chip" href="api/live/{channel}/mjpeg?stream=main" target="_blank" rel="noreferrer">Open main stream</a>
     </div>
   </main>
@@ -1428,7 +1503,9 @@ def _live_dashboard_html(channel: int = 8, event_type: Optional[str] = None) -> 
 </html>"""
 
 
-@app.get("/app/live", response_class=HTMLResponse, summary="Open the live camera page")
+@app.get("/live", response_class=HTMLResponse, summary="Open the live camera page")
+@app.get("/live/", response_class=HTMLResponse, include_in_schema=False)
+@app.get("/app/live", response_class=HTMLResponse, include_in_schema=False)
 @app.get("/app/live/", response_class=HTMLResponse, include_in_schema=False)
 async def app_live(channel: int = Query(ROLLING_BUFFER_CHANNEL, description="Camera channel number"), event_type: Optional[str] = Query(None)):
     if channel < 0 or (nvr_host and channel >= nvr_host.num_channels):

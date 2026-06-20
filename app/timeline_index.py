@@ -118,6 +118,44 @@ class TimelineIndex:
                 return entry
         return None
 
+    def find_recent_entry(
+        self,
+        channel: int,
+        event_type: str,
+        timestamp: datetime,
+        window_seconds: int = 8,
+    ) -> Optional[TimelineEntry]:
+        """Find the most recent matching entry within a small time window."""
+        target = self._normalize_dt(timestamp)
+        if target is None:
+            return None
+
+        best_entry: Optional[TimelineEntry] = None
+        best_delta: Optional[float] = None
+        for entry in self.entries:
+            if entry.channel != channel or entry.event_type.lower() != event_type.lower():
+                continue
+
+            entry_ts = self._normalize_dt(entry.timestamp)
+            if entry_ts is None:
+                continue
+
+            delta = abs((entry_ts - target).total_seconds())
+            if delta > window_seconds:
+                continue
+
+            if best_delta is None or delta < best_delta:
+                best_entry = entry
+                best_delta = delta
+                continue
+
+            if delta == best_delta and best_entry is not None:
+                if entry_ts > self._normalize_dt(best_entry.timestamp):
+                    best_entry = entry
+                    best_delta = delta
+
+        return best_entry
+
     def get_entries(
         self,
         channel: Optional[int] = None,

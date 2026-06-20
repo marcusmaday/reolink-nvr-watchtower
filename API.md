@@ -121,6 +121,10 @@ Opens the event dashboard.
 
 Opens the live camera page.
 
+### `GET /live`
+
+Opens the live camera page outside the add-on ingress prefix.
+
 ### `GET /app/ws/events`
 
 WebSocket feed for live dashboard updates.
