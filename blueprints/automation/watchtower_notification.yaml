@@ -103,9 +103,7 @@ actions:
               event_timestamp: "{{ trigger.to_state.last_changed.isoformat() if trigger.to_state is not none else now().isoformat() }}"
               snapshot_file: "/config/www/tmp/doorbell_snapshot_{{ trigger.id }}.jpg"
               snapshot_url: "/local/tmp/doorbell_snapshot_{{ trigger.id }}.jpg"
-              app_path_base: "/app/15e0e6e5_watchtower"
               app_event_url: "{{ base_url }}?channel={{ channel }}&event_type={{ event_type }}"
-              app_live_url: "{{ base_url }}?view=live&channel={{ channel }}&event_type={{ event_type }}"
               notif_title: "🔔 Doorbell"
               msg: "Someone is at the door!"
           - action: camera.snapshot
@@ -121,7 +119,6 @@ actions:
               timestamp: "{{ event_timestamp }}"
               camera_name: "{{ cam_name }}"
               snapshot_url: "{{ snapshot_url }}"
-              live_url: "{{ app_live_url }}"
               title: "{{ notif_title }}"
               message: "{{ msg }}"
               source: "home_assistant"
@@ -138,9 +135,6 @@ actions:
                   - action: URI
                     title: View Event Clip
                     uri: "{{ app_event_url }}"
-                  - action: URI
-                    title: View Live Stream
-                    uri: "{{ app_live_url }}"
           - action: !input notify_service_secondary
             data:
               title: "{{ notif_title }}"
@@ -154,9 +148,6 @@ actions:
                   - action: URI
                     title: View Event Clip
                     uri: "{{ app_event_url }}"
-                  - action: URI
-                    title: View Live Stream
-                    uri: "{{ app_live_url }}"
 
       - conditions:
           - condition: template
@@ -170,9 +161,7 @@ actions:
               event_timestamp: "{{ trigger.to_state.last_changed.isoformat() if trigger.to_state is not none else now().isoformat() }}"
               snapshot_file: "/config/www/tmp/doorbell_snapshot_{{ trigger.id }}.jpg"
               snapshot_url: "/local/tmp/doorbell_snapshot_{{ trigger.id }}.jpg"
-              app_path_base: "/app/15e0e6e5_watchtower"
               app_event_url: "{{ base_url }}?channel={{ channel }}&event_type={{ event_type }}"
-              app_live_url: "{{ base_url }}?view=live&channel={{ channel }}&event_type={{ event_type }}"
               notif_title: "👤 Person Detected"
               msg: "Person detected at the front door."
           - action: camera.snapshot
@@ -188,7 +177,6 @@ actions:
               timestamp: "{{ event_timestamp }}"
               camera_name: "{{ cam_name }}"
               snapshot_url: "{{ snapshot_url }}"
-              live_url: "{{ app_live_url }}"
               title: "{{ notif_title }}"
               message: "{{ msg }}"
               source: "home_assistant"
@@ -203,9 +191,6 @@ actions:
                   - action: URI
                     title: View Event Clip
                     uri: "{{ app_event_url }}"
-                  - action: URI
-                    title: View Live Stream
-                    uri: "{{ app_live_url }}"
           - action: !input notify_service_secondary
             data:
               title: "{{ notif_title }}"
@@ -217,6 +202,3 @@ actions:
                   - action: URI
                     title: View Event Clip
                     uri: "{{ app_event_url }}"
-                  - action: URI
-                    title: View Live Stream
-                    uri: "{{ app_live_url }}"

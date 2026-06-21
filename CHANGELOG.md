@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.39
+
+- Change the Home Assistant sidebar icon to a clearer camera/security glyph for Watchtower.
+
+## 0.4.38
+
+- Remove the remaining live-view affordance from the app and notification flow so users are no longer sent to a nonfunctional stream page.
+
+## 0.4.37
+
+- Remove the live-view affordance from the app and notification actions since the live stream has not been reliable.
+- Keep event playback focused on clips only.
+
 ## 0.4.36
 
 - Normalize stale live links back to the app root with `?view=live` so existing events stop opening the dead `/live` path.
