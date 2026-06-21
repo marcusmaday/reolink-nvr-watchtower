@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Any
 from contextlib import asynccontextmanager
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlsplit, urlunsplit, parse_qsl, urlencode
 
 from fastapi import FastAPI, Query, HTTPException, WebSocket, WebSocketDisconnect, Request
 from fastapi.responses import JSONResponse, HTMLResponse, FileResponse, RedirectResponse, StreamingResponse
@@ -299,7 +299,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title=APP_NAME,
     description="Camera event dashboard, clip playback, and live view for a Reolink NVR",
-    version="0.4.35",
+    version="0.4.36",
     lifespan=lifespan,
 )
 
@@ -334,6 +334,25 @@ def _normalize_event_type(event_type: Optional[str]) -> Optional[str]:
 def _normalize_datetime_for_compare(value: datetime) -> datetime:
     if value.tzinfo is not None:
         return value.astimezone(timezone.utc).replace(tzinfo=None)
+    return value
+
+
+def _normalize_live_url(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    if "?view=live" in value:
+        return value
+
+    parsed = urlsplit(value)
+    path = parsed.path or ""
+    if path.endswith("/app/live") or path == "/app/live" or path.endswith("/live"):
+        query_items = [(key, val) for key, val in parse_qsl(parsed.query, keep_blank_values=True) if key != "view"]
+        query_items.insert(0, ("view", "live"))
+        if "channel" not in dict(query_items):
+            query_items.append(("channel", str(ROLLING_BUFFER_CHANNEL)))
+        new_path = "/app/15e0e6e5_watchtower"
+        return urlunsplit((parsed.scheme, parsed.netloc, new_path, urlencode(query_items, doseq=True), parsed.fragment))
+
     return value
 
 
@@ -404,7 +423,7 @@ def _timeline_entry_to_recent(entry: TimelineEntry) -> dict[str, Any]:
     clip_source = entry.clip_path or metadata.get("clip_url") or metadata.get("download_url") or metadata.get("stream_url")
     live_source = metadata.get("live_url")
     clip_url = f"api/events/{entry.entry_id}/clip" if clip_source else None
-    live_url = live_source or None
+    live_url = _normalize_live_url(live_source)
     thumbnail_url = entry.thumbnail_path or metadata.get("thumbnail_url") or metadata.get("snapshot_url")
     return {
         "entry_id": entry.entry_id,
@@ -868,7 +887,7 @@ def _entry_media_source(entry: TimelineEntry, kind: str) -> Optional[str]:
             or metadata.get("stream_url")
         )
     if kind == "live":
-        return metadata.get("live_url") or metadata.get("stream_url") or entry.clip_path
+        return _normalize_live_url(metadata.get("live_url")) or metadata.get("stream_url") or entry.clip_path
     return None
 
 
@@ -915,7 +934,7 @@ async def root(request: Request):
         return HTMLResponse(_dashboard_html())
     return {
         "name": APP_NAME,
-        "version": "0.4.35",
+        "version": "0.4.36",
         "status": "running",
         "docs": "/docs",
         "health": "/api/health",

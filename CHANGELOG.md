@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.36
+
+- Normalize stale live links back to the app root with `?view=live` so existing events stop opening the dead `/live` path.
+- Store the live notification target as the app root query URL instead of a path suffix.
+
 ## 0.4.35
 
 - Delay buffered clip finalization until the full before/after window has elapsed so partial clips do not get finalized early.
