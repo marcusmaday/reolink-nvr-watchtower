@@ -47,8 +47,8 @@ blueprint:
     app_base_url:
       name: App base URL
       description: >
-        The Home Assistant deep link used to open the app on phones.
-      default: "homeassistant://navigate/app/15e0e6e5_watchtower"
+        The browser URL to the Watchtower app on your Home Assistant instance.
+      default: "http://homeassistant.local:8123/app/15e0e6e5_watchtower"
       selector:
         text: {}
     notify_service_primary:
@@ -104,10 +104,9 @@ actions:
               snapshot_file: "/config/www/tmp/doorbell_snapshot_{{ trigger.id }}.jpg"
               snapshot_url: "/local/tmp/doorbell_snapshot_{{ trigger.id }}.jpg"
               app_path_base: "/app/15e0e6e5_watchtower"
-              app_event_path: "{{ app_path_base }}?channel={{ channel }}&event_type={{ event_type }}"
-              app_live_path: "/app/live?channel={{ channel }}&event_type={{ event_type }}"
               app_event_url: "{{ base_url }}?channel={{ channel }}&event_type={{ event_type }}"
               app_live_url: "{{ base_url }}/live?channel={{ channel }}&event_type={{ event_type }}"
+              app_live_path: "/app/live?channel={{ channel }}&event_type={{ event_type }}"
               notif_title: "🔔 Doorbell"
               msg: "Someone is at the door!"
           - action: camera.snapshot
@@ -173,10 +172,9 @@ actions:
               snapshot_file: "/config/www/tmp/doorbell_snapshot_{{ trigger.id }}.jpg"
               snapshot_url: "/local/tmp/doorbell_snapshot_{{ trigger.id }}.jpg"
               app_path_base: "/app/15e0e6e5_watchtower"
-              app_event_path: "{{ app_path_base }}?channel={{ channel }}&event_type={{ event_type }}"
-              app_live_path: "/app/live?channel={{ channel }}&event_type={{ event_type }}"
               app_event_url: "{{ base_url }}?channel={{ channel }}&event_type={{ event_type }}"
               app_live_url: "{{ base_url }}/live?channel={{ channel }}&event_type={{ event_type }}"
+              app_live_path: "/app/live?channel={{ channel }}&event_type={{ event_type }}"
               notif_title: "👤 Person Detected"
               msg: "Person detected at the front door."
           - action: camera.snapshot
