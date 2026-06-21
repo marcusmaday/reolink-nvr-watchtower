@@ -4,6 +4,10 @@
 
 - Change the Home Assistant sidebar icon to a clearer camera/security glyph for Watchtower.
 
+## 0.4.40
+
+- Switch the Home Assistant sidebar icon to a plain camera glyph so the sidebar can render it reliably.
+
 ## 0.4.38
 
 - Remove the remaining live-view affordance from the app and notification flow so users are no longer sent to a nonfunctional stream page.
