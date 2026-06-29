@@ -7,6 +7,7 @@ Watchtower is a Home Assistant add-on and companion app for a Reolink NVR. It gi
 - a mobile-friendly event dashboard for recent camera activity
 - clip playback for event clips with pre-roll buffering
 - live view from the selected camera
+- camera-aware filtering across any participating NVR channels
 - Home Assistant notifications with snapshot thumbnails and app links
 - a searchable recording timeline for the NVR
 

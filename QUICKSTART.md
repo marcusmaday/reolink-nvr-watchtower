@@ -31,6 +31,9 @@ buffer_size_seconds: 60
 clip_duration_before: 1
 clip_duration_after: 15
 clip_quality: medium
+watch_channels: "all"
+buffer_channels: ""
+default_live_channel: -1
 retention_days: 7
 max_storage_mb: 5000
 external_storage_path: ""
@@ -39,6 +42,12 @@ debug: false
 ```
 
 Restart the add-on after saving.
+
+Camera selection notes:
+
+- `watch_channels` controls which NVR channels appear in Watchtower. Use `all` or a comma-separated list like `0,1,8`.
+- `buffer_channels` controls which of those cameras keep rolling pre-roll buffers for local clip generation. Leave it blank to match `watch_channels`.
+- `default_live_channel` controls which camera opens when the app needs a fallback live view. Use `-1` to pick the first participating camera automatically.
 
 ## 3. Import The Blueprint
 

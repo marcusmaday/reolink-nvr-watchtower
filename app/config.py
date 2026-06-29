@@ -32,6 +32,9 @@ class VideoBufferConfig:
     clip_duration_before: int
     clip_duration_after: int
     clip_quality: str  # "low", "medium", "high"
+    watch_channels: str
+    buffer_channels: str
+    default_live_channel: Optional[int]
 
 
 @dataclass
@@ -88,6 +91,12 @@ def get_config() -> AppConfig:
     clip_duration_before = int(os.getenv("CLIP_DURATION_BEFORE", "1"))
     clip_duration_after = int(os.getenv("CLIP_DURATION_AFTER", "15"))
     clip_quality = os.getenv("CLIP_QUALITY", "medium")
+    watch_channels = os.getenv("WATCH_CHANNELS", "all")
+    buffer_channels = os.getenv("BUFFER_CHANNELS", "")
+    default_live_channel_raw = os.getenv("DEFAULT_LIVE_CHANNEL", "").strip()
+    default_live_channel = int(default_live_channel_raw) if default_live_channel_raw else None
+    if default_live_channel is not None and default_live_channel < 0:
+        default_live_channel = None
 
     video_buffer_config = VideoBufferConfig(
         enabled=buffer_enabled,
@@ -95,6 +104,9 @@ def get_config() -> AppConfig:
         clip_duration_before=clip_duration_before,
         clip_duration_after=clip_duration_after,
         clip_quality=clip_quality,
+        watch_channels=watch_channels,
+        buffer_channels=buffer_channels,
+        default_live_channel=default_live_channel,
     )
 
     # ─── Storage Configuration ───
@@ -152,10 +164,13 @@ def _log_config(config: AppConfig):
     logger.info("NVR: %s:%d (SSL: %s)", config.nvr.host, config.nvr.port, config.nvr.use_https)
     logger.info("Username: %s", config.nvr.username)
     logger.info(
-        "Video Buffer: enabled=%s, size=%ds, clip_quality=%s",
+        "Video Buffer: enabled=%s, size=%ds, clip_quality=%s, watch_channels=%s, buffer_channels=%s, default_live_channel=%s",
         config.video_buffer.enabled,
         config.video_buffer.buffer_size_seconds,
         config.video_buffer.clip_quality,
+        config.video_buffer.watch_channels,
+        config.video_buffer.buffer_channels or "watch_channels",
+        config.video_buffer.default_live_channel if config.video_buffer.default_live_channel is not None else "auto",
     )
     logger.info("Clips Directory: %s", config.storage.clips_directory)
     logger.info(

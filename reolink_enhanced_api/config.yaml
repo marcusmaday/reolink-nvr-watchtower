@@ -33,6 +33,9 @@ options:
   clip_duration_before: 1
   clip_duration_after: 15
   clip_quality: "medium"
+  watch_channels: "all"
+  buffer_channels: ""
+  default_live_channel: -1
   retention_days: 7
   max_storage_mb: 5000
   external_storage_path: ""
@@ -51,6 +54,9 @@ schema:
   clip_duration_before: "int(1,30)"
   clip_duration_after: "int(1,30)"
   clip_quality: "str"
+  watch_channels: "str"
+  buffer_channels: "str"
+  default_live_channel: "int(-1,64)"
   retention_days: "int(1,90)"
   max_storage_mb: "int(100,20000)"
   external_storage_path: "str"

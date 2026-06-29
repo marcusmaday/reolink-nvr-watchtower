@@ -72,7 +72,6 @@ BUFFER_RETENTION_SECONDS = max(
     LOCAL_CLIP_SECONDS + 20,
 )
 FFMPEG_BIN = os.getenv("FFMPEG_BIN", "ffmpeg")
-ROLLING_BUFFER_CHANNEL = int(os.getenv("ROLLING_BUFFER_CHANNEL", "8"))
 ROLLING_SEGMENT_SECONDS = int(os.getenv("ROLLING_SEGMENT_SECONDS", "2"))
 CLIP_DURATION_BEFORE = max(APP_CONFIG.video_buffer.clip_duration_before, 1)
 CLIP_DURATION_AFTER = max(APP_CONFIG.video_buffer.clip_duration_after, 1)
@@ -88,15 +87,21 @@ INDEX_FILE = APP_CONFIG.storage.index_file
 RETENTION_DAYS = APP_CONFIG.storage.retention_days
 MAX_STORAGE_MB = APP_CONFIG.storage.max_storage_mb
 EXTERNAL_STORAGE_PATH = APP_CONFIG.storage.external_storage_path
+WATCH_CHANNELS_CONFIG = APP_CONFIG.video_buffer.watch_channels
+BUFFER_CHANNELS_CONFIG = APP_CONFIG.video_buffer.buffer_channels
+DEFAULT_LIVE_CHANNEL_CONFIG = APP_CONFIG.video_buffer.default_live_channel
 
 logger.info(
-    "Clip timing configured: before=%ss after=%ss local_clip=%ss buffer_retries=%d delay=%ss dedupe_window=%ss",
+    "Clip timing configured: before=%ss after=%ss local_clip=%ss buffer_retries=%d delay=%ss dedupe_window=%ss watch_channels=%s buffer_channels=%s default_live_channel=%s",
     CLIP_DURATION_BEFORE,
     CLIP_DURATION_AFTER,
     LOCAL_CLIP_SECONDS,
     BUFFER_CLIP_RETRY_ATTEMPTS,
     BUFFER_CLIP_RETRY_DELAY_SECONDS,
     EVENT_DEDUPE_WINDOW_SECONDS,
+    WATCH_CHANNELS_CONFIG,
+    BUFFER_CHANNELS_CONFIG or "watch_channels",
+    DEFAULT_LIVE_CHANNEL_CONFIG if DEFAULT_LIVE_CHANNEL_CONFIG is not None else "auto",
 )
 
 # Global NVR host instance
@@ -104,9 +109,13 @@ nvr_host: Optional[Host] = None
 timeline_index: Optional[TimelineIndex] = None
 ui_clients: list[WebSocket] = []
 clip_tasks: set[asyncio.Task] = set()
-rolling_buffer: Optional[RollingSegmentBuffer] = None
+rolling_buffers: dict[int, RollingSegmentBuffer] = {}
 rolling_buffer_monitor_task: Optional[asyncio.Task] = None
 storage_manager: Optional[StorageManager] = None
+available_channels: list[dict[str, Any]] = []
+participating_channels: set[int] = set()
+buffered_channels: set[int] = set()
+default_live_channel: Optional[int] = None
 
 
 # ─── Pydantic models ──────────────────────────────────────────────────────────
@@ -136,6 +145,9 @@ class ChannelInfo(BaseModel):
     name:    str
     enabled: bool
     model:   Optional[str] = None
+    participating: bool = False
+    buffered: bool = False
+    default_live: bool = False
 
 
 class DeviceInfo(BaseModel):
@@ -145,6 +157,13 @@ class DeviceInfo(BaseModel):
     mac_address:      str
     is_nvr:           bool
     num_channels:     int
+
+
+class CameraSelectionInfo(BaseModel):
+    available_channels: list[ChannelInfo]
+    participating_channels: list[int]
+    buffered_channels: list[int]
+    default_live_channel: Optional[int] = None
 
 
 class HealthCheck(BaseModel):
@@ -187,31 +206,107 @@ class RecentEvent(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+def _parse_channel_selection(raw_value: Optional[str], valid_channels: set[int], fallback: Optional[set[int]] = None) -> set[int]:
+    if fallback is None:
+        fallback = set(valid_channels)
+
+    raw = (raw_value or "").strip()
+    if not raw or raw.lower() == "all":
+        return set(fallback)
+
+    selected: set[int] = set()
+    for chunk in raw.split(","):
+        value = chunk.strip()
+        if not value:
+            continue
+        try:
+            channel = int(value)
+        except ValueError:
+            logger.warning("Ignoring invalid channel selection token '%s'", value)
+            continue
+        if channel not in valid_channels:
+            logger.warning("Ignoring configured channel %s because it is not available on the NVR", channel)
+            continue
+        selected.add(channel)
+
+    return selected or set(fallback)
+
+
+def _channel_name(channel: int) -> Optional[str]:
+    for info in available_channels:
+        if info.get("channel") == channel:
+            return info.get("name")
+    if nvr_host:
+        try:
+            return nvr_host.camera_name(channel)
+        except Exception:
+            return None
+    return None
+
+
+def _sorted_channels(channels: set[int]) -> list[int]:
+    return sorted(channels)
+
+
+def _resolve_default_live_channel() -> Optional[int]:
+    if DEFAULT_LIVE_CHANNEL_CONFIG is not None and DEFAULT_LIVE_CHANNEL_CONFIG in participating_channels:
+        return DEFAULT_LIVE_CHANNEL_CONFIG
+    if participating_channels:
+        return min(participating_channels)
+    return None
+
+
+def _channel_is_participating(channel: int) -> bool:
+    return channel in participating_channels
+
+
+def _channel_has_buffer(channel: int) -> bool:
+    return channel in buffered_channels and channel in rolling_buffers
+
+
+def _resolve_live_channel(channel: Optional[int] = None) -> Optional[int]:
+    if channel is not None:
+        return channel if _channel_is_participating(channel) else None
+    return default_live_channel
+
+
+def _channel_info_payload(channel_info: dict[str, Any]) -> ChannelInfo:
+    channel = channel_info["channel"]
+    return ChannelInfo(
+        **channel_info,
+        participating=channel in participating_channels,
+        buffered=channel in buffered_channels,
+        default_live=channel == default_live_channel,
+    )
+
+
 async def _rolling_buffer_monitor_loop() -> None:
     while True:
         await asyncio.sleep(ROLLING_BUFFER_MONITOR_INTERVAL_SECONDS)
-        if not rolling_buffer:
+        if not rolling_buffers:
             continue
-        try:
-            if rolling_buffer.is_running():
-                continue
-            logger.warning(
-                "Rolling buffer monitor detected a stopped recorder for channel %d; restarting",
-                ROLLING_BUFFER_CHANNEL,
-            )
-            await rolling_buffer.restart()
-            logger.info("Rolling buffer restarted for channel %d", ROLLING_BUFFER_CHANNEL)
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            logger.error("Rolling buffer monitor error: %s", e)
+        for channel, buffer in list(rolling_buffers.items()):
+            try:
+                if buffer.is_running():
+                    continue
+                logger.warning(
+                    "Rolling buffer monitor detected a stopped recorder for channel %d; restarting",
+                    channel,
+                )
+                await buffer.restart()
+                logger.info("Rolling buffer restarted for channel %d", channel)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.error("Rolling buffer monitor error for channel %d: %s", channel, e)
 
 
 # ─── Lifespan (startup / shutdown) ───────────────────────────────────────────
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global nvr_host, timeline_index, rolling_buffer, rolling_buffer_monitor_task, storage_manager
+    global nvr_host, timeline_index, rolling_buffers, rolling_buffer_monitor_task, storage_manager
+    global available_channels, participating_channels, buffered_channels, default_live_channel
 
     logger.info("Starting Watchtower...")
     logger.info("Connecting to NVR at %s:%s", NVR_HOST, NVR_PORT)
@@ -226,12 +321,32 @@ async def lifespan(app: FastAPI):
         )
         await nvr_host.get_host_data()
         logger.info("Connected to NVR: %s (%s channels)", nvr_host.nvr_name, nvr_host.num_channels)
+        available_channels = await get_channels_info(nvr_host)
+        valid_channels = {info["channel"] for info in available_channels if info.get("enabled", True)}
+        participating_channels = _parse_channel_selection(WATCH_CHANNELS_CONFIG, valid_channels)
+        buffered_channels = _parse_channel_selection(BUFFER_CHANNELS_CONFIG, valid_channels, fallback=participating_channels)
+        buffered_channels &= participating_channels
+        default_live_channel = _resolve_default_live_channel()
+        logger.info(
+            "Active camera config resolved: participating=%s buffered=%s default_live=%s",
+            _sorted_channels(participating_channels),
+            _sorted_channels(buffered_channels),
+            default_live_channel if default_live_channel is not None else "none",
+        )
     except ReolinkError as e:
         logger.error("Failed to connect to NVR: %s", e)
         nvr_host = None
+        available_channels = []
+        participating_channels = set()
+        buffered_channels = set()
+        default_live_channel = None
     except Exception as e:
         logger.error("Unexpected error during startup: %s", e)
         nvr_host = None
+        available_channels = []
+        participating_channels = set()
+        buffered_channels = set()
+        default_live_channel = None
 
     timeline_index = TimelineIndex(index_file=INDEX_FILE)
     logger.info("Timeline index initialized at %s", INDEX_FILE)
@@ -249,23 +364,25 @@ async def lifespan(app: FastAPI):
         logger.error("Failed to start storage manager: %s", e)
         storage_manager = None
 
+    rolling_buffers = {}
     if LOCAL_CLIP_ENABLED and nvr_host:
-        try:
-            rolling_buffer = RollingSegmentBuffer(
-                nvr_client=nvr_host,
-                channel=ROLLING_BUFFER_CHANNEL,
-                storage_dir=str(CLIPS_DIRECTORY / "rolling_buffer" / f"channel_{ROLLING_BUFFER_CHANNEL}"),
-                segment_seconds=ROLLING_SEGMENT_SECONDS,
-                retention_seconds=BUFFER_RETENTION_SECONDS,
-                ffmpeg_bin=FFMPEG_BIN,
-                stream=_preferred_stream(),
-            )
-            await rolling_buffer.start()
-        except Exception as e:
-            logger.error("Failed to start rolling buffer: %s", e)
-            rolling_buffer = None
+        for channel in _sorted_channels(buffered_channels):
+            try:
+                buffer = RollingSegmentBuffer(
+                    nvr_client=nvr_host,
+                    channel=channel,
+                    storage_dir=str(CLIPS_DIRECTORY / "rolling_buffer" / f"channel_{channel}"),
+                    segment_seconds=ROLLING_SEGMENT_SECONDS,
+                    retention_seconds=BUFFER_RETENTION_SECONDS,
+                    ffmpeg_bin=FFMPEG_BIN,
+                    stream=_preferred_stream(),
+                )
+                await buffer.start()
+                rolling_buffers[channel] = buffer
+            except Exception as e:
+                logger.error("Failed to start rolling buffer for channel %d: %s", channel, e)
 
-    if rolling_buffer:
+    if rolling_buffers:
         rolling_buffer_monitor_task = asyncio.create_task(_rolling_buffer_monitor_loop())
 
     yield  # ← app runs here
@@ -278,11 +395,12 @@ async def lifespan(app: FastAPI):
         except asyncio.CancelledError:
             pass
         rolling_buffer_monitor_task = None
-    if rolling_buffer:
+    for channel, buffer in list(rolling_buffers.items()):
         try:
-            await rolling_buffer.stop()
+            await buffer.stop()
         except Exception as e:
-            logger.error("Error stopping rolling buffer: %s", e)
+            logger.error("Error stopping rolling buffer for channel %d: %s", channel, e)
+    rolling_buffers = {}
     if storage_manager:
         try:
             await storage_manager.stop()
@@ -642,6 +760,7 @@ def _event_clip_storage_path(channel: int, timestamp: datetime, event_type: str)
 
 
 async def _generate_buffered_event_clip(entry: TimelineEntry) -> None:
+    rolling_buffer = rolling_buffers.get(entry.channel)
     if not rolling_buffer:
         logger.debug("Rolling buffer unavailable for %s", entry.entry_id)
         return
@@ -834,8 +953,28 @@ def _schedule_clip_generation(entry: TimelineEntry) -> None:
     if not LOCAL_CLIP_ENABLED:
         return
 
-    if not rolling_buffer:
-        logger.warning("Rolling buffer is not available; cannot generate pre-roll clip for %s", entry.entry_id)
+    if entry.channel not in buffered_channels:
+        logger.info(
+            "Channel %d is not configured for buffered clips; using direct fallback for %s",
+            entry.channel,
+            entry.entry_id,
+        )
+        clip_path = _event_clip_storage_path(entry.channel, entry.timestamp, entry.event_type)
+        task = asyncio.create_task(_capture_direct_event_clip(entry, clip_path))
+        clip_tasks.add(task)
+
+        def _done_direct(t: asyncio.Task) -> None:
+            clip_tasks.discard(t)
+
+        task.add_done_callback(_done_direct)
+        return
+
+    if entry.channel not in rolling_buffers:
+        logger.warning(
+            "Rolling buffer is not available for channel %d; cannot generate pre-roll clip for %s",
+            entry.channel,
+            entry.entry_id,
+        )
         return
 
     task = asyncio.create_task(_generate_buffered_event_clip(entry))
@@ -943,12 +1082,23 @@ async def get_device_info():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/camera-config", response_model=CameraSelectionInfo, summary="Configured participating cameras")
+async def get_camera_config():
+    _require_nvr()
+    return CameraSelectionInfo(
+        available_channels=[_channel_info_payload(info) for info in available_channels],
+        participating_channels=_sorted_channels(participating_channels),
+        buffered_channels=_sorted_channels(buffered_channels),
+        default_live_channel=default_live_channel,
+    )
+
+
 @app.get("/api/channels", response_model=List[ChannelInfo], summary="List all camera channels")
 async def get_channels():
     _require_nvr()
     try:
         channels = await get_channels_info(nvr_host)
-        return [ChannelInfo(**ch) for ch in channels]
+        return [_channel_info_payload(ch) for ch in channels]
     except Exception as e:
         logger.error("Error getting channels: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
@@ -986,6 +1136,8 @@ async def search(
             status_code=400,
             detail=f"Channel {channel} out of range. NVR has {nvr_host.num_channels} channels (0-based).",
         )
+    if not _channel_is_participating(channel):
+        raise HTTPException(status_code=403, detail=f"Channel {channel} is not enabled in Watchtower.")
 
     # Validate dates
     try:
@@ -1084,12 +1236,16 @@ async def get_timeline(
             status_code=400,
             detail=f"Invalid event_type '{event_type}'. Must be one of: {', '.join(EVENT_TYPE_MAP.keys())}",
         )
+    if channel is not None and not _channel_is_participating(channel):
+        raise HTTPException(status_code=403, detail=f"Channel {channel} is not enabled in Watchtower.")
     entries = timeline_index.get_entries(
         channel=channel,
         event_type=_normalize_event_type(event_type),
         since=datetime.now() - __import__('datetime').timedelta(hours=hours),
-        limit=limit,
+        limit=limit if channel is not None else max(limit * 5, limit),
     )
+    if channel is None:
+        entries = [entry for entry in entries if _channel_is_participating(entry.channel)]
     return {
         "hours": hours,
         "channel": channel,
@@ -1112,11 +1268,15 @@ async def get_recent_events(
             status_code=400,
             detail=f"Invalid event_type '{event_type}'. Must be one of: {', '.join(EVENT_TYPE_MAP.keys())}",
         )
+    if channel is not None and not _channel_is_participating(channel):
+        raise HTTPException(status_code=403, detail=f"Channel {channel} is not enabled in Watchtower.")
     entries = timeline_index.get_entries(
         channel=channel,
         event_type=normalized_event_type,
-        limit=limit,
+        limit=limit if channel is not None else max(limit * 5, limit),
     )
+    if channel is None:
+        entries = [entry for entry in entries if _channel_is_participating(entry.channel)]
     return {
         "limit": limit,
         "channel": channel,
@@ -1143,6 +1303,8 @@ async def ingest_event(payload: EventIngestRequest):
             status_code=400,
             detail=f"Channel {payload.channel} out of range. NVR has {nvr_host.num_channels} channels (0-based).",
         )
+    if not _channel_is_participating(payload.channel):
+        raise HTTPException(status_code=403, detail=f"Channel {payload.channel} is not enabled in Watchtower.")
 
     try:
         event_timestamp = datetime.fromisoformat(payload.timestamp) if payload.timestamp else datetime.now()
@@ -1373,14 +1535,28 @@ async def _live_mjpeg_stream(channel: int, stream: str = "sub"):
 async def get_live_mjpeg(channel: int, stream: str = Query("sub", description="Stream quality: 'sub' or 'main'")):
     if channel < 0 or channel >= (nvr_host.num_channels if nvr_host else 0):
         raise HTTPException(status_code=400, detail="Invalid channel")
+    if not _channel_is_participating(channel):
+        raise HTTPException(status_code=403, detail=f"Channel {channel} is not enabled in Watchtower.")
     if stream not in ("sub", "main"):
         raise HTTPException(status_code=400, detail="stream must be 'sub' or 'main'")
     return await _live_mjpeg_stream(channel, stream=stream)
 
 
-def _live_dashboard_html(channel: int = 8, event_type: Optional[str] = None) -> str:
+def _live_dashboard_html(channel: int, event_type: Optional[str] = None) -> str:
     event_label = html.escape(event_type) if event_type else ""
-    subtitle = f"{event_label} • Channel {channel}" if event_label else f"Channel {channel}"
+    camera_label = html.escape(_channel_name(channel) or f"Channel {channel}")
+    subtitle = f"{event_label} • {camera_label}" if event_label else camera_label
+    camera_link_items: list[str] = []
+    for info in available_channels:
+        info_channel = info.get("channel")
+        if info_channel not in participating_channels:
+            continue
+        info_name = html.escape(info.get("name") or f"Channel {info_channel}")
+        active_class = " active" if info_channel == channel else ""
+        camera_link_items.append(
+            f'<a class="chip{active_class}" href="/app/live?channel={info_channel}">{info_name}</a>'
+        )
+    camera_links = "".join(camera_link_items)
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -1445,6 +1621,16 @@ def _live_dashboard_html(channel: int = 8, event_type: Optional[str] = None) -> 
       background: rgba(255,255,255,0.03);
       white-space: nowrap;
     }}
+    .chip.active {{
+      border-color: var(--accent);
+      color: var(--accent);
+    }}
+    .camera-list {{
+      display: flex;
+      gap: 0.5rem;
+      overflow-x: auto;
+      padding-bottom: 0.15rem;
+    }}
     .viewer {{
       flex: 1;
       min-height: 0;
@@ -1481,6 +1667,7 @@ def _live_dashboard_html(channel: int = 8, event_type: Optional[str] = None) -> 
       </div>
       <a class="chip" href="/app">Back to events</a>
     </div>
+    <div class="camera-list">{camera_links}</div>
     <div class="viewer">
       <img src="api/live/{channel}/mjpeg" alt="Live stream for channel {channel}">
     </div>
@@ -1501,8 +1688,9 @@ def _live_dashboard_html(channel: int = 8, event_type: Optional[str] = None) -> 
 @app.get("/live/", response_class=HTMLResponse, include_in_schema=False)
 @app.get("/app/live", response_class=HTMLResponse, include_in_schema=False)
 @app.get("/app/live/", response_class=HTMLResponse, include_in_schema=False)
-async def app_live(channel: int = Query(ROLLING_BUFFER_CHANNEL, description="Camera channel number"), event_type: Optional[str] = Query(None)):
-    if channel < 0 or (nvr_host and channel >= nvr_host.num_channels):
+async def app_live(channel: Optional[int] = Query(None, description="Camera channel number"), event_type: Optional[str] = Query(None)):
+    channel = _resolve_live_channel(channel)
+    if channel is None:
         raise HTTPException(status_code=400, detail="Invalid channel")
     return HTMLResponse(_live_dashboard_html(channel=channel, event_type=event_type))
 
@@ -1681,6 +1869,9 @@ def _dashboard_html() -> str:
         <button class="chip" data-filter="PERSON">Person</button>
         <button class="chip" data-filter="DOORBELL">Doorbell</button>
       </div>
+      <div class="toolbar" id="cameraFilters">
+        <button class="chip active" data-channel-filter="ALL">All Cameras</button>
+      </div>
       <ul id="events" class="events"></ul>
     </aside>
     <section class="player">
@@ -1689,6 +1880,7 @@ def _dashboard_html() -> str:
           <button id="refresh">Refresh</button>
           <span class="muted" id="count">0 events</span>
         </div>
+        <a id="openLive" class="chip" href="/app/live">Open Live</a>
       </div>
       <div class="player-wrap">
         <video id="player" controls playsinline preload="metadata"></video>
@@ -1700,16 +1892,25 @@ def _dashboard_html() -> str:
     </section>
   </main>
   <script>
-    const state = { events: [], filter: 'ALL', selected: null, socket: null };
+    const state = { events: [], channels: [], filter: 'ALL', channel: 'ALL', selected: null, socket: null, defaultLiveChannel: null };
     const deepLink = new URLSearchParams(window.location.search);
     const requestedEventType = (() => {
       const raw = (deepLink.get('event_type') || '').trim().toUpperCase();
       return ['PERSON', 'DOORBELL'].includes(raw) ? raw : null;
     })();
+    const requestedChannel = (() => {
+      const raw = (deepLink.get('channel') || '').trim();
+      if (!raw) return 'ALL';
+      const parsed = Number.parseInt(raw, 10);
+      return Number.isFinite(parsed) ? parsed : 'ALL';
+    })();
     if (requestedEventType) state.filter = requestedEventType;
+    state.channel = requestedChannel;
     const elEvents = document.getElementById('events');
     const elCount = document.getElementById('count');
     const elStatus = document.getElementById('status');
+    const elCameraFilters = document.getElementById('cameraFilters');
+    const elOpenLive = document.getElementById('openLive');
     const player = document.getElementById('player');
     const snapshot = document.getElementById('snapshot');
     const details = document.getElementById('details');
@@ -1756,12 +1957,38 @@ def _dashboard_html() -> str:
       return `${url}${separator}v=${encodeURIComponent(token)}`;
     }
 
+    function activeChannelName(channel) {
+      const info = state.channels.find(item => item.channel === channel);
+      return info?.name || `Channel ${channel}`;
+    }
+
+    function updateLiveLink(entry = null) {
+      const channel = entry?.channel ?? (state.channel !== 'ALL' ? state.channel : state.defaultLiveChannel);
+      elOpenLive.href = channel === null || channel === undefined ? '/app/live' : `/app/live?channel=${channel}`;
+    }
+
+    function renderChannelFilters() {
+      const buttons = [
+        `<button class="chip ${state.channel === 'ALL' ? 'active' : ''}" data-channel-filter="ALL">All Cameras</button>`,
+        ...state.channels.map(info => `
+          <button class="chip ${state.channel === info.channel ? 'active' : ''}" data-channel-filter="${info.channel}">
+            ${escapeHtml(info.name || `Channel ${info.channel}`)}
+          </button>
+        `),
+      ];
+      elCameraFilters.innerHTML = buttons.join('');
+    }
+
     function visibleEvents() {
-      const events = state.filter === 'ALL' ? state.events : state.events.filter(e => e.event_type === state.filter);
+      let events = state.filter === 'ALL' ? state.events : state.events.filter(e => e.event_type === state.filter);
+      if (state.channel !== 'ALL') {
+        events = events.filter(e => e.channel === state.channel);
+      }
       return sortNewestFirst(events);
     }
 
     function render() {
+      renderChannelFilters();
       const events = visibleEvents();
       elCount.textContent = `${events.length} event${events.length === 1 ? '' : 's'}`;
       elEvents.innerHTML = events.map(e => `
@@ -1775,10 +2002,24 @@ def _dashboard_html() -> str:
 
       if ((!state.selected || !events.find(e => e.entry_id === state.selected)) && events.length) {
         selectEvent(events[0].entry_id, false);
+        return;
       }
+      updateLiveLink(state.events.find(e => e.entry_id === state.selected) || null);
     }
 
     function setStatus(text) { elStatus.textContent = text; }
+
+    async function loadChannels() {
+      const resp = await fetch(apiUrl('api/camera-config'), { cache: 'no-store' });
+      const data = await resp.json();
+      state.channels = (data.available_channels || []).filter(info => info.participating);
+      state.defaultLiveChannel = data.default_live_channel;
+      if (state.channel !== 'ALL' && !state.channels.find(info => info.channel === state.channel)) {
+        state.channel = 'ALL';
+      }
+      renderChannelFilters();
+      updateLiveLink();
+    }
 
     async function loadRecent() {
       const resp = await fetch(apiUrl('api/events/recent?limit=50'), { cache: 'no-store' });
@@ -1794,6 +2035,7 @@ def _dashboard_html() -> str:
       if (!entry) return;
       state.selected = id;
       render();
+      updateLiveLink(entry);
       const clipUrl = entry.clip_url;
       const snapshotUrl = cacheBust(entry.thumbnail_url || entry.metadata?.snapshot_url, entry.entry_id);
       if (clipUrl) {
@@ -1819,7 +2061,7 @@ def _dashboard_html() -> str:
         <div class="detail-meta">
           <span class="detail-pill ${entry.event_type === 'DOORBELL' ? 'doorbell' : ''}">${escapeHtml(entry.event_type)}</span>
           <span class="detail-pill">${escapeHtml(formatTime(entry.timestamp))}</span>
-          <span class="detail-pill">${escapeHtml(entry.camera_name ? entry.camera_name : `Channel ${entry.channel}`)}</span>
+          <span class="detail-pill">${escapeHtml(entry.camera_name ? entry.camera_name : activeChannelName(entry.channel))}</span>
           ${entry.clip_status && entry.clip_status !== 'ready' ? `<span class="detail-pill">${escapeHtml(`Clip ${entry.clip_status}`)}</span>` : ''}
         </div>
         ${entry.message && entry.message !== entry.title ? `<div class="detail-note">${escapeHtml(entry.message)}</div>` : ''}
@@ -1841,6 +2083,14 @@ def _dashboard_html() -> str:
       });
     });
 
+    elCameraFilters.addEventListener('click', (ev) => {
+      const btn = ev.target.closest('[data-channel-filter]');
+      if (!btn) return;
+      const value = btn.dataset.channelFilter;
+      state.channel = value === 'ALL' ? 'ALL' : Number.parseInt(value, 10);
+      render();
+    });
+
     document.getElementById('refresh').addEventListener('click', loadRecent);
 
     function connectSocket() {
@@ -1850,6 +2100,12 @@ def _dashboard_html() -> str:
       socket.onclose = () => { setStatus('Reconnecting…'); setTimeout(connectSocket, 1500); };
       socket.onmessage = (event) => {
         const msg = JSON.parse(event.data);
+        if (msg.type === 'hello' && Array.isArray(msg.events)) {
+          state.events = sortNewestFirst(msg.events);
+          render();
+          if (state.selected) selectEvent(state.selected, false);
+          return;
+        }
         if (msg.type === 'event' && msg.event) {
           state.events = sortNewestFirst([msg.event, ...state.events.filter(e => e.entry_id !== msg.event.entry_id)]);
           state.selected = msg.event.entry_id;
@@ -1859,7 +2115,7 @@ def _dashboard_html() -> str:
       };
     }
 
-    loadRecent().then(() => {
+    Promise.all([loadChannels(), loadRecent()]).then(() => {
       connectSocket();
     }).catch(err => {
       setStatus('Offline');
@@ -1875,11 +2131,12 @@ def _dashboard_html() -> str:
 async def app_dashboard(
     request: Request,
     view: Optional[str] = Query(None, description="Optional app view: 'live'"),
-    channel: int = Query(ROLLING_BUFFER_CHANNEL, description="Camera channel number"),
+    channel: Optional[int] = Query(None, description="Camera channel number"),
     event_type: Optional[str] = Query(None),
 ):
     if view and view.strip().lower() == "live":
-        if channel < 0 or (nvr_host and channel >= nvr_host.num_channels):
+        channel = _resolve_live_channel(channel)
+        if channel is None:
             raise HTTPException(status_code=400, detail="Invalid channel")
         return HTMLResponse(_live_dashboard_html(channel=channel, event_type=event_type))
     return HTMLResponse(_dashboard_html())
@@ -1893,7 +2150,11 @@ async def ws_events(websocket: WebSocket):
     try:
         await websocket.send_json({
             "type": "hello",
-            "events": [_timeline_entry_to_recent(entry) for entry in timeline_index.get_entries(limit=20)],
+            "events": [
+                _timeline_entry_to_recent(entry)
+                for entry in timeline_index.get_entries(limit=100)
+                if _channel_is_participating(entry.channel)
+            ][:20],
         })
         while True:
             await websocket.receive_text()
@@ -1921,7 +2182,12 @@ async def debug_info():
             "is_nvr":       nvr_host.is_nvr         if nvr_host else None,
             "mac_address":  nvr_host.mac_address    if nvr_host else None,
         },
-        "rolling_buffer": rolling_buffer.get_stats() if rolling_buffer else None,
+        "camera_config": {
+            "participating_channels": _sorted_channels(participating_channels),
+            "buffered_channels": _sorted_channels(buffered_channels),
+            "default_live_channel": default_live_channel,
+        },
+        "rolling_buffers": {str(channel): buffer.get_stats() for channel, buffer in rolling_buffers.items()},
         "supported_event_types": list(EVENT_TYPE_MAP.keys()),
     }
 

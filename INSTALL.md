@@ -35,6 +35,9 @@ buffer_size_seconds: 60
 clip_duration_before: 1
 clip_duration_after: 15
 clip_quality: medium
+watch_channels: "all"
+buffer_channels: ""
+default_live_channel: -1
 retention_days: 7
 max_storage_mb: 5000
 external_storage_path: ""
@@ -47,6 +50,9 @@ Notes:
 - `api_port` is the port the app listens on inside the add-on. Leave it at `5000` unless you know you need to change it.
 - `clip_quality` controls which RTSP stream the app uses for generated clips.
 - `buffer_size_seconds` controls how much rolling clip data is kept available for pre-roll.
+- `watch_channels` controls which NVR channels participate in Watchtower. Use `all` or a comma-separated list like `0,1,8`.
+- `buffer_channels` lets you keep pre-roll buffers on only a subset of participating cameras. Leave it blank to reuse `watch_channels`.
+- `default_live_channel` chooses the fallback camera for live view. Set `-1` to auto-select the first participating camera.
 
 Restart the add-on after saving the configuration.
 

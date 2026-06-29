@@ -26,7 +26,11 @@ Returns the connected NVR model, firmware, MAC address, and channel count.
 
 ### `GET /api/channels`
 
-Returns the list of available channels and their names.
+Returns the list of available channels and their names, plus whether each one is participating in Watchtower, buffered for pre-roll clips, and the default live camera.
+
+### `GET /api/camera-config`
+
+Returns the resolved Watchtower camera selection: available channels, participating channels, buffered channels, and the default live camera.
 
 ### `GET /api/debug/info`
 

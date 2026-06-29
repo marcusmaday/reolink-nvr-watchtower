@@ -29,6 +29,9 @@ if [ -f "$CONFIG_PATH" ]; then
     export ALLOW_CORS=$(jq -r '.allow_cors // false' "$CONFIG_PATH")
     export EXTERNAL_STORAGE_PATH=$(jq -r '.external_storage_path // empty' "$CONFIG_PATH")
     export CLIP_QUALITY=$(jq -r '.clip_quality // "medium"' "$CONFIG_PATH")
+    export WATCH_CHANNELS=$(jq -r '.watch_channels // "all"' "$CONFIG_PATH")
+    export BUFFER_CHANNELS=$(jq -r '.buffer_channels // empty' "$CONFIG_PATH")
+    export DEFAULT_LIVE_CHANNEL=$(jq -r '.default_live_channel // empty' "$CONFIG_PATH")
     
     echo "Configuration:"
     echo "  API Port: $API_PORT"
@@ -38,6 +41,9 @@ if [ -f "$CONFIG_PATH" ]; then
     echo "  Buffer Enabled: $BUFFER_ENABLED"
     echo "  Retention: $RETENTION_DAYS days"
     echo "  Clip Quality: $CLIP_QUALITY"
+    echo "  Watch Channels: $WATCH_CHANNELS"
+    echo "  Buffer Channels: ${BUFFER_CHANNELS:-watch_channels}"
+    echo "  Default Live Channel: ${DEFAULT_LIVE_CHANNEL:-auto}"
     echo "  API Host: $API_HOST"
     echo "  Allow CORS: $ALLOW_CORS"
     echo "  External Storage: ${EXTERNAL_STORAGE_PATH:-none}"
