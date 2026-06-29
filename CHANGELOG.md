@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.42
+
+- Add support for multiple participating cameras, including per-camera filtering in the Watchtower app.
+- Add add-on configuration for participating cameras, buffered cameras, and the default live-view camera.
+
 ## 0.4.39
 
 - Change the Home Assistant sidebar icon to a clearer camera/security glyph for Watchtower.
