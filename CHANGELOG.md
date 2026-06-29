@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.43
+
+- Hide empty NVR channel slots from the Watchtower camera picker so only real cameras appear in the UI.
+
 ## 0.4.42
 
 - Add support for multiple participating cameras, including per-camera filtering in the Watchtower app.

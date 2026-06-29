@@ -113,11 +113,20 @@ class NVRClient:
         host = self._host
         channels = []
         for i in range(host.num_channels):
+            raw_name = host.camera_name(i) if hasattr(host, "camera_name") else None
+            raw_model = host.camera_model(i) if hasattr(host, "camera_model") else None
+            name = str(raw_name).strip() if raw_name is not None else ""
+            model = str(raw_model).strip() if raw_model is not None else None
+
+            placeholder_name = not name or name.lower() in {"unknown", f"channel {i}"}
+            placeholder_model = not model or model.lower() == "unknown"
+            enabled = not (placeholder_name and placeholder_model)
+
             channels.append({
                 "channel": i,
-                "name": host.camera_name(i) or f"Channel {i}",
-                "enabled": True,
-                "model": host.camera_model(i) if hasattr(host, "camera_model") else None,
+                "name": name or (f"Channel {i}" if enabled else "Unknown"),
+                "enabled": enabled,
+                "model": model,
             })
         return channels
 
