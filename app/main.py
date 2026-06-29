@@ -71,6 +71,7 @@ BUFFER_RETENTION_SECONDS = max(
     APP_CONFIG.video_buffer.buffer_size_seconds,
     LOCAL_CLIP_SECONDS + 20,
 )
+ABSOLUTE_MAX_BUFFER_AGE_SECONDS = max(int(os.getenv("ABSOLUTE_MAX_BUFFER_AGE_SECONDS", "300")), 60)
 FFMPEG_BIN = os.getenv("FFMPEG_BIN", "ffmpeg")
 ROLLING_SEGMENT_SECONDS = int(os.getenv("ROLLING_SEGMENT_SECONDS", "2"))
 CLIP_DURATION_BEFORE = max(APP_CONFIG.video_buffer.clip_duration_before, 1)
@@ -92,10 +93,12 @@ BUFFER_CHANNELS_CONFIG = APP_CONFIG.video_buffer.buffer_channels
 DEFAULT_LIVE_CHANNEL_CONFIG = APP_CONFIG.video_buffer.default_live_channel
 
 logger.info(
-    "Clip timing configured: before=%ss after=%ss local_clip=%ss buffer_retries=%d delay=%ss dedupe_window=%ss watch_channels=%s buffer_channels=%s default_live_channel=%s",
+    "Clip timing configured: before=%ss after=%ss local_clip=%ss buffer_retention=%ss absolute_buffer_cap=%ss buffer_retries=%d delay=%ss dedupe_window=%ss watch_channels=%s buffer_channels=%s default_live_channel=%s",
     CLIP_DURATION_BEFORE,
     CLIP_DURATION_AFTER,
     LOCAL_CLIP_SECONDS,
+    BUFFER_RETENTION_SECONDS,
+    ABSOLUTE_MAX_BUFFER_AGE_SECONDS,
     BUFFER_CLIP_RETRY_ATTEMPTS,
     BUFFER_CLIP_RETRY_DELAY_SECONDS,
     EVENT_DEDUPE_WINDOW_SECONDS,
@@ -357,6 +360,8 @@ async def lifespan(app: FastAPI):
         retention_days=RETENTION_DAYS,
         max_storage_mb=MAX_STORAGE_MB,
         external_storage_path=EXTERNAL_STORAGE_PATH,
+        buffer_retention_seconds=BUFFER_RETENTION_SECONDS,
+        absolute_buffer_max_age_seconds=ABSOLUTE_MAX_BUFFER_AGE_SECONDS,
     )
     try:
         await storage_manager.start()
@@ -374,6 +379,7 @@ async def lifespan(app: FastAPI):
                     storage_dir=str(CLIPS_DIRECTORY / "rolling_buffer" / f"channel_{channel}"),
                     segment_seconds=ROLLING_SEGMENT_SECONDS,
                     retention_seconds=BUFFER_RETENTION_SECONDS,
+                    max_segment_age_seconds=ABSOLUTE_MAX_BUFFER_AGE_SECONDS,
                     ffmpeg_bin=FFMPEG_BIN,
                     stream=_preferred_stream(),
                 )
@@ -417,7 +423,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title=APP_NAME,
     description="Camera event dashboard, clip playback, and live view for a Reolink NVR",
-    version="0.4.43",
+    version="0.4.44",
     lifespan=lifespan,
 )
 
@@ -1048,7 +1054,7 @@ async def root(request: Request):
         return HTMLResponse(_dashboard_html())
     return {
         "name": APP_NAME,
-        "version": "0.4.43",
+        "version": "0.4.44",
         "status": "running",
         "docs": "/docs",
         "health": "/api/health",
@@ -1904,6 +1910,7 @@ def _dashboard_html() -> str:
       const parsed = Number.parseInt(raw, 10);
       return Number.isFinite(parsed) ? parsed : 'ALL';
     })();
+    const requestedEventId = (deepLink.get('event_id') || '').trim() || null;
     if (requestedEventType) state.filter = requestedEventType;
     state.channel = requestedChannel;
     const elEvents = document.getElementById('events');
@@ -2025,9 +2032,30 @@ def _dashboard_html() -> str:
       const resp = await fetch(apiUrl('api/events/recent?limit=50'), { cache: 'no-store' });
       const data = await resp.json();
       state.events = sortNewestFirst(data.events || []);
-      state.selected = state.events.length ? state.events[0].entry_id : null;
+      if (requestedEventId) {
+        const requestedEvent = await loadRequestedEvent();
+        if (requestedEvent) {
+          state.events = sortNewestFirst([requestedEvent, ...state.events.filter(e => e.entry_id !== requestedEvent.entry_id)]);
+        }
+      }
+      state.selected = requestedEventId && state.events.find(e => e.entry_id === requestedEventId)
+        ? requestedEventId
+        : (state.events.length ? state.events[0].entry_id : null);
       render();
       if (state.selected) selectEvent(state.selected, false);
+    }
+
+    async function loadRequestedEvent() {
+      if (!requestedEventId) return null;
+      const existing = state.events.find(e => e.entry_id === requestedEventId);
+      if (existing) return existing;
+      try {
+        const resp = await fetch(apiUrl(`api/timeline/${encodeURIComponent(requestedEventId)}`), { cache: 'no-store' });
+        if (!resp.ok) return null;
+        return await resp.json();
+      } catch (err) {
+        return null;
+      }
     }
 
     function selectEvent(id, userInitiated = true) {

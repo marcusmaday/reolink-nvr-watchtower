@@ -26,6 +26,8 @@ class StorageManager:
         retention_days: int = 7,
         max_storage_mb: int = 5000,
         external_storage_path: Optional[str] = None,
+        buffer_retention_seconds: int = 300,
+        absolute_buffer_max_age_seconds: int = 300,
     ):
         self.clips_dir = Path(clips_directory)
         self.external_storage = Path(external_storage_path) if external_storage_path else None
@@ -33,6 +35,8 @@ class StorageManager:
         self.retention_days = retention_days
         self.max_storage_mb = max_storage_mb
         self.max_storage_bytes = max_storage_mb * 1024 * 1024
+        self.buffer_retention_seconds = max(buffer_retention_seconds, 60)
+        self.absolute_buffer_max_age_seconds = max(absolute_buffer_max_age_seconds, 60)
 
         self._running = False
         self._maintenance_task: Optional[asyncio.Task] = None
@@ -62,17 +66,51 @@ class StorageManager:
         """Periodic maintenance: enforce retention and storage limits."""
         while self._running:
             try:
-                # Run maintenance every hour
-                await asyncio.sleep(3600)
-
                 logger.debug("Running storage maintenance")
+                await self._enforce_buffer_retention()
                 await self._enforce_retention()
                 await self._enforce_storage_limit()
+
+                # Run maintenance every hour
+                await asyncio.sleep(3600)
 
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 logger.error("Error in storage maintenance: %s", e)
+
+    async def _enforce_buffer_retention(self):
+        """Delete stale rolling-buffer transport stream segments."""
+        rolling_root = self.clips_dir / "rolling_buffer"
+        if not rolling_root.exists():
+            return
+
+        cutoff_seconds = min(self.buffer_retention_seconds, self.absolute_buffer_max_age_seconds)
+        cutoff_time = datetime.now() - timedelta(seconds=cutoff_seconds)
+        deleted_count = 0
+        deleted_bytes = 0
+
+        try:
+            for ts_file in rolling_root.rglob("*.ts"):
+                try:
+                    file_mtime = datetime.fromtimestamp(ts_file.stat().st_mtime)
+                    if file_mtime >= cutoff_time:
+                        continue
+                    file_size = ts_file.stat().st_size
+                    ts_file.unlink()
+                    deleted_count += 1
+                    deleted_bytes += file_size
+                except FileNotFoundError:
+                    continue
+
+            if deleted_count > 0:
+                logger.info(
+                    "Deleted %d stale rolling-buffer segments (%.1f MB)",
+                    deleted_count,
+                    deleted_bytes / (1024 * 1024),
+                )
+        except Exception as e:
+            logger.error("Error enforcing rolling buffer retention: %s", e)
 
     async def _enforce_retention(self):
         """Delete clips older than retention_days."""
@@ -80,11 +118,11 @@ class StorageManager:
         deleted_count = 0
 
         try:
-            for mp4_file in self.clips_dir.rglob("*.mp4"):
-                file_mtime = datetime.fromtimestamp(mp4_file.stat().st_mtime)
+            for media_file in self._iter_managed_files(include_ts=False):
+                file_mtime = datetime.fromtimestamp(media_file.stat().st_mtime)
                 if file_mtime < cutoff_time:
-                    logger.debug("Deleting old clip: %s", mp4_file)
-                    mp4_file.unlink()
+                    logger.debug("Deleting old clip: %s", media_file)
+                    media_file.unlink()
                     deleted_count += 1
 
             if deleted_count > 0:
@@ -118,10 +156,10 @@ class StorageManager:
 
         # Get list of all clips with modification times
         clips = []
-        for mp4_file in self.clips_dir.rglob("*.mp4"):
-            mtime = mp4_file.stat().st_mtime
-            size = mp4_file.stat().st_size
-            clips.append((mp4_file, mtime, size))
+        for media_file in self._iter_managed_files(include_ts=True):
+            mtime = media_file.stat().st_mtime
+            size = media_file.stat().st_size
+            clips.append((media_file, mtime, size))
 
         # Sort by modification time (oldest first)
         clips.sort(key=lambda x: x[1])
@@ -142,8 +180,8 @@ class StorageManager:
         """Calculate total storage usage in bytes."""
         total = 0
         try:
-            for mp4_file in self.clips_dir.rglob("*.mp4"):
-                total += mp4_file.stat().st_size
+            for media_file in self._iter_managed_files(include_ts=True):
+                total += media_file.stat().st_size
         except Exception as e:
             logger.error("Error calculating storage: %s", e)
         return total
@@ -151,7 +189,7 @@ class StorageManager:
     async def get_storage_info(self) -> dict:
         """Get current storage usage information."""
         total_bytes = self._get_storage_usage()
-        total_files = sum(1 for _ in self.clips_dir.rglob("*.mp4"))
+        total_files = sum(1 for _ in self._iter_managed_files(include_ts=True))
 
         return {
             "total_bytes": total_bytes,
@@ -170,4 +208,16 @@ class StorageManager:
             "external_storage": str(self.external_storage) if self.external_storage else None,
             "retention_days": self.retention_days,
             "max_storage_mb": self.max_storage_mb,
+            "buffer_retention_seconds": self.buffer_retention_seconds,
+            "absolute_buffer_max_age_seconds": self.absolute_buffer_max_age_seconds,
         }
+
+    def _iter_managed_files(self, include_ts: bool) -> list[Path]:
+        patterns = ["*.mp4"]
+        if include_ts:
+            patterns.append("*.ts")
+
+        files: list[Path] = []
+        for pattern in patterns:
+            files.extend(self.clips_dir.rglob(pattern))
+        return files

@@ -64,9 +64,15 @@ Create the automation from the blueprint and choose:
 - snapshot camera
 - front door lock
 - two `notify` services
-- app base URL
+- app navigation path or URL
 
-Use a placeholder for your remote-access URL in any shared examples.
+Recommended value:
+
+```text
+/app/15e0e6e5_watchtower
+```
+
+The blueprint converts that to a `homeassistant://navigate/...` mobile deep link so it works away from your local Wi-Fi too.
 
 ## 4. Add The Relay Command
 
@@ -81,6 +87,7 @@ rest_command:
     payload: >-
       {
         "event_type": "{{ event_type }}",
+        "event_id": "{{ event_id }}",
         "channel": {{ channel }},
         "timestamp": "{{ timestamp }}",
         "camera_name": "{{ camera_name }}",

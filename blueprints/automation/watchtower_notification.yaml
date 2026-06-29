@@ -45,10 +45,15 @@ blueprint:
           max: 64
           mode: box
     app_base_url:
-      name: App base URL
+      name: App navigation path or URL
       description: >
-        The browser URL to the Watchtower app on your Home Assistant instance.
-      default: "http://homeassistant.local:8123/app/15e0e6e5_watchtower"
+        The Watchtower app target for mobile notifications. You can use a
+        Home Assistant app navigation target like
+        `homeassistant://navigate/app/15e0e6e5_watchtower`, a path like
+        `/app/15e0e6e5_watchtower`, or a full Home Assistant URL. The
+        blueprint will normalize non-app URLs to Home Assistant app
+        navigation links so they work off Wi-Fi.
+      default: "/app/15e0e6e5_watchtower"
       selector:
         text: {}
     notify_service_primary:
@@ -101,9 +106,26 @@ actions:
               cam_name: !input camera_name
               event_type: "DOORBELL"
               event_timestamp: "{{ trigger.to_state.last_changed.isoformat() if trigger.to_state is not none else now().isoformat() }}"
+              event_id: "{{ channel }}_{{ event_timestamp }}_{{ event_type }}"
               snapshot_file: "/config/www/tmp/doorbell_snapshot_{{ trigger.id }}.jpg"
               snapshot_url: "/local/tmp/doorbell_snapshot_{{ trigger.id }}.jpg"
-              app_event_url: "{{ base_url }}?channel={{ channel }}&event_type={{ event_type }}"
+              app_target: >-
+                {% set raw = (base_url | string | trim) %}
+                {% if raw.startswith('homeassistant://') %}
+                  {{ raw }}
+                {% elif '://' in raw %}
+                  {% set host_and_path = raw.split('://', 1)[1] %}
+                  {% if '/' in host_and_path %}
+                    {{ 'homeassistant://navigate/' ~ host_and_path.split('/', 1)[1] }}
+                  {% else %}
+                    {{ 'homeassistant://navigate/' }}
+                  {% endif %}
+                {% elif raw.startswith('/') %}
+                  {{ 'homeassistant://navigate' ~ raw }}
+                {% else %}
+                  {{ 'homeassistant://navigate/' ~ raw }}
+                {% endif %}
+              app_event_url: "{{ app_target }}?channel={{ channel }}&event_type={{ event_type }}&event_id={{ event_id | urlencode }}"
               notif_title: "🔔 Doorbell"
               msg: "Someone is at the door!"
           - action: camera.snapshot
@@ -114,6 +136,7 @@ actions:
           - delay: "00:00:01"
           - action: rest_command.reolink_ingest_event
             data:
+              event_id: "{{ event_id }}"
               event_type: "{{ event_type }}"
               channel: "{{ channel }}"
               timestamp: "{{ event_timestamp }}"
@@ -159,9 +182,26 @@ actions:
               cam_name: !input camera_name
               event_type: "PERSON"
               event_timestamp: "{{ trigger.to_state.last_changed.isoformat() if trigger.to_state is not none else now().isoformat() }}"
+              event_id: "{{ channel }}_{{ event_timestamp }}_{{ event_type }}"
               snapshot_file: "/config/www/tmp/doorbell_snapshot_{{ trigger.id }}.jpg"
               snapshot_url: "/local/tmp/doorbell_snapshot_{{ trigger.id }}.jpg"
-              app_event_url: "{{ base_url }}?channel={{ channel }}&event_type={{ event_type }}"
+              app_target: >-
+                {% set raw = (base_url | string | trim) %}
+                {% if raw.startswith('homeassistant://') %}
+                  {{ raw }}
+                {% elif '://' in raw %}
+                  {% set host_and_path = raw.split('://', 1)[1] %}
+                  {% if '/' in host_and_path %}
+                    {{ 'homeassistant://navigate/' ~ host_and_path.split('/', 1)[1] }}
+                  {% else %}
+                    {{ 'homeassistant://navigate/' }}
+                  {% endif %}
+                {% elif raw.startswith('/') %}
+                  {{ 'homeassistant://navigate' ~ raw }}
+                {% else %}
+                  {{ 'homeassistant://navigate/' ~ raw }}
+                {% endif %}
+              app_event_url: "{{ app_target }}?channel={{ channel }}&event_type={{ event_type }}&event_id={{ event_id | urlencode }}"
               notif_title: "👤 Person Detected"
               msg: "Person detected at the front door."
           - action: camera.snapshot
@@ -172,6 +212,7 @@ actions:
           - delay: "00:00:01"
           - action: rest_command.reolink_ingest_event
             data:
+              event_id: "{{ event_id }}"
               event_type: "{{ event_type }}"
               channel: "{{ channel }}"
               timestamp: "{{ event_timestamp }}"

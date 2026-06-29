@@ -15,6 +15,7 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 SEGMENT_NAME_RE = re.compile(r"^(?P<stamp>\d{8}T\d{6})(?:_(?P<index>\d+))?\.ts$")
+PRUNE_INTERVAL_SECONDS = 30
 
 
 @dataclass
@@ -31,6 +32,7 @@ class RollingSegmentBuffer:
         storage_dir: str,
         segment_seconds: int = 2,
         retention_seconds: int = 90,
+        max_segment_age_seconds: int = 300,
         ffmpeg_bin: str = "ffmpeg",
         stream: str = "sub",
     ):
@@ -39,6 +41,7 @@ class RollingSegmentBuffer:
         self.storage_dir = Path(storage_dir)
         self.segment_seconds = max(1, segment_seconds)
         self.retention_seconds = max(retention_seconds, self.segment_seconds * 2)
+        self.max_segment_age_seconds = max(max_segment_age_seconds, self.segment_seconds * 2)
         self.ffmpeg_bin = ffmpeg_bin
         self.stream = stream
 
@@ -46,6 +49,7 @@ class RollingSegmentBuffer:
         self._running = False
         self._task: Optional[asyncio.Task] = None
         self._rtsp_url: Optional[str] = None
+        self._last_prune_at: Optional[datetime] = None
 
     async def start(self):
         if self._running:
@@ -53,6 +57,7 @@ class RollingSegmentBuffer:
         self._rtsp_url = await self._resolve_rtsp_url()
         if not self._rtsp_url:
             raise RuntimeError(f"No RTSP source available for channel {self.channel}")
+        self._prune_old_segments()
         self._running = True
         self._task = asyncio.create_task(self._record_loop())
         logger.info("Rolling buffer started for channel %d", self.channel)
@@ -87,6 +92,7 @@ class RollingSegmentBuffer:
     async def _record_loop(self):
         assert self._rtsp_url
         while self._running:
+            self._prune_old_segments(force=True)
             cmd = [
                 self.ffmpeg_bin,
                 "-hide_banner",
@@ -136,7 +142,13 @@ class RollingSegmentBuffer:
                     stderr=asyncio.subprocess.PIPE,
                 )
                 stderr_task = asyncio.create_task(self._drain_stderr(proc.stderr))
-                await proc.wait()
+                while self._running:
+                    try:
+                        await asyncio.wait_for(proc.wait(), timeout=PRUNE_INTERVAL_SECONDS)
+                        break
+                    except asyncio.TimeoutError:
+                        self._prune_old_segments()
+                self._prune_old_segments(force=True)
                 stderr_task.cancel()
                 try:
                     await stderr_task
@@ -146,6 +158,13 @@ class RollingSegmentBuffer:
                     logger.warning("Rolling recorder exited for channel %d with return code %s", self.channel, proc.returncode)
                     await asyncio.sleep(2)
             except asyncio.CancelledError:
+                if 'proc' in locals() and proc.returncode is None:
+                    proc.terminate()
+                    try:
+                        await asyncio.wait_for(proc.wait(), timeout=5)
+                    except Exception:
+                        proc.kill()
+                        await proc.wait()
                 raise
             except Exception as e:
                 logger.error("Rolling recorder error for channel %d: %s", self.channel, e)
@@ -188,8 +207,13 @@ class RollingSegmentBuffer:
             segments.append(SegmentFile(path=file_path, start_time=start_time))
         return segments
 
-    def _prune_old_segments(self) -> None:
-        cutoff = datetime.now() - timedelta(seconds=self.retention_seconds)
+    def _prune_old_segments(self, force: bool = False) -> None:
+        now = datetime.now()
+        if not force and self._last_prune_at and (now - self._last_prune_at).total_seconds() < PRUNE_INTERVAL_SECONDS:
+            return
+        self._last_prune_at = now
+        effective_retention_seconds = min(self.retention_seconds, self.max_segment_age_seconds)
+        cutoff = datetime.now() - timedelta(seconds=effective_retention_seconds)
         for file_path in self.storage_dir.glob("*.ts"):
             try:
                 match = SEGMENT_NAME_RE.match(file_path.name)
@@ -306,6 +330,7 @@ class RollingSegmentBuffer:
             "storage_dir": str(self.storage_dir),
             "segment_seconds": self.segment_seconds,
             "retention_seconds": self.retention_seconds,
+            "max_segment_age_seconds": self.max_segment_age_seconds,
             "segments": len(segments),
             "oldest_segment": segments[0].start_time.isoformat() if segments else None,
             "newest_segment": segments[-1].start_time.isoformat() if segments else None,

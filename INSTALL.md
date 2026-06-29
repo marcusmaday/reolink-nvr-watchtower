@@ -80,9 +80,15 @@ Then create an automation from the blueprint and choose:
 3. Your snapshot camera
 4. Your front door lock
 5. Your two mobile notify services
-6. Your app base URL
+6. Your app navigation path or URL
 
-Use a placeholder for your remote-access URL in shared examples. Do not paste a private Nabu Casa URL into docs or screenshots.
+Recommended value:
+
+```text
+/app/15e0e6e5_watchtower
+```
+
+The blueprint converts that to a `homeassistant://navigate/...` mobile deep link so it works from the Home Assistant companion app even when you are away from your local Wi-Fi.
 
 The blueprint handles:
 
@@ -106,6 +112,7 @@ rest_command:
     payload: >-
       {
         "event_type": "{{ event_type }}",
+        "event_id": "{{ event_id }}",
         "channel": {{ channel }},
         "timestamp": "{{ timestamp }}",
         "camera_name": "{{ camera_name }}",

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.44
+
+- Continuously prune rolling-buffer transport stream segments while recording so buffer files no longer grow without bound.
+- Include rolling-buffer files in storage maintenance and emergency storage-limit cleanup.
+- Add a hard five-minute maximum age for rolling-buffer segments so stale pre-roll files are always removed aggressively.
+- Normalize notification links to Home Assistant app deep links and include the specific event ID so "View Event Clip" works more reliably away from the local network.
+
 ## 0.4.43
 
 - Hide empty NVR channel slots from the Watchtower camera picker so only real cameras appear in the UI.
