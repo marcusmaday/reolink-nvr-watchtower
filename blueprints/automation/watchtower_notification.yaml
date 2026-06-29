@@ -37,7 +37,10 @@ blueprint:
           domain: lock
     camera_channel:
       name: Camera channel
-      description: NVR channel number for the front door camera.
+      description: >
+        Zero-based NVR channel index for this camera. Reolink labels channels
+        as 1-12 in the UI, but Watchtower uses indexes 0-11, so this should
+        usually be the labeled channel minus 1.
       default: 8
       selector:
         number:

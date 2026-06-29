@@ -45,6 +45,7 @@ Search recordings on the NVR.
 Parameters:
 
 - `channel` required, zero-based channel number
+- `camera_name` strongly recommended for Home Assistant relays so Watchtower can correct channel-numbering mismatches automatically
 - `start_date` required, format `YYYY-MM-DD`
 - `end_date` optional, defaults to `start_date`
 - `event_type` optional, one of `DOORBELL`, `PERSON`, `MOTION`, `ANIMAL`, `VEHICLE`

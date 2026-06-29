@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.45
+
+- Resolve ingested Home Assistant events to the correct participating NVR channel by camera name before building timeline entries and buffered clips.
+- Fall back to one-based channel correction for ingest payloads when camera names are unavailable, reducing channel-numbering mismatches.
+- Log the enabled camera/channel map at startup so channel configuration problems are easier to diagnose.
+
 ## 0.4.44
 
 - Continuously prune rolling-buffer transport stream segments while recording so buffer files no longer grow without bound.

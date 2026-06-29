@@ -105,6 +105,10 @@ Find `HA_GATEWAY_IP` with:
 ip route | awk '/default/ {print $3}'
 ```
 
+Watchtower stores NVR channels internally as zero-based indexes. Reolink commonly labels channels as `1-12` while Watchtower uses `0-11`, so the channel used in the notification automation should usually be `labeled channel - 1`.
+
+Include `camera_name` in the payload too so Watchtower can reconcile the event to the matching participating camera automatically if the numeric mapping is off.
+
 `APP_PORT` defaults to `5000`.
 
 Restart Home Assistant Core after adding the command.

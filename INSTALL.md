@@ -132,6 +132,10 @@ ip route | awk '/default/ {print $3}'
 
 `APP_PORT` is the add-on port you configured. It defaults to `5000`.
 
+Watchtower stores NVR channels internally as zero-based indexes. Reolink commonly labels those same channels as `1-12` in the UI while Watchtower addresses them as `0-11`, so the value used in notification automations should usually be `labeled channel - 1`.
+
+Keep sending `camera_name` in the payload as well so Watchtower can reconcile the event to the correct camera automatically if a channel mapping is ever off.
+
 After adding the block, restart Home Assistant Core or reload the automation if you already had the command in place.
 
 ## 6. Open The App On Mobile

@@ -251,6 +251,46 @@ def _sorted_channels(channels: set[int]) -> list[int]:
     return sorted(channels)
 
 
+def _normalize_camera_name(name: Optional[str]) -> str:
+    return (name or "").strip().casefold()
+
+
+def _resolve_ingest_channel(payload_channel: int, camera_name: Optional[str]) -> int:
+    normalized_name = _normalize_camera_name(camera_name)
+
+    if normalized_name:
+        name_matches = [
+            info["channel"]
+            for info in available_channels
+            if info.get("enabled", True)
+            and _channel_is_participating(info["channel"])
+            and _normalize_camera_name(info.get("name")) == normalized_name
+        ]
+        if len(name_matches) == 1:
+            resolved_channel = name_matches[0]
+            if resolved_channel != payload_channel:
+                logger.warning(
+                    "Resolved ingest channel mismatch for camera '%s': payload channel=%d, actual channel=%d",
+                    camera_name,
+                    payload_channel,
+                    resolved_channel,
+                )
+            return resolved_channel
+
+    if _channel_is_participating(payload_channel):
+        return payload_channel
+
+    if payload_channel > 0 and _channel_is_participating(payload_channel - 1):
+        logger.warning(
+            "Assuming one-based channel numbering for ingest payload channel=%d; using channel=%d instead",
+            payload_channel,
+            payload_channel - 1,
+        )
+        return payload_channel - 1
+
+    return payload_channel
+
+
 def _resolve_default_live_channel() -> Optional[int]:
     if DEFAULT_LIVE_CHANNEL_CONFIG is not None and DEFAULT_LIVE_CHANNEL_CONFIG in participating_channels:
         return DEFAULT_LIVE_CHANNEL_CONFIG
@@ -330,6 +370,18 @@ async def lifespan(app: FastAPI):
         buffered_channels = _parse_channel_selection(BUFFER_CHANNELS_CONFIG, valid_channels, fallback=participating_channels)
         buffered_channels &= participating_channels
         default_live_channel = _resolve_default_live_channel()
+        logger.info(
+            "Available enabled cameras: %s",
+            [
+                {
+                    "channel": info["channel"],
+                    "name": info.get("name"),
+                    "model": info.get("model"),
+                }
+                for info in available_channels
+                if info.get("enabled", True)
+            ],
+        )
         logger.info(
             "Active camera config resolved: participating=%s buffered=%s default_live=%s",
             _sorted_channels(participating_channels),
@@ -423,7 +475,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title=APP_NAME,
     description="Camera event dashboard, clip playback, and live view for a Reolink NVR",
-    version="0.4.44",
+    version="0.4.45",
     lifespan=lifespan,
 )
 
@@ -1054,7 +1106,7 @@ async def root(request: Request):
         return HTMLResponse(_dashboard_html())
     return {
         "name": APP_NAME,
-        "version": "0.4.44",
+        "version": "0.4.45",
         "status": "running",
         "docs": "/docs",
         "health": "/api/health",
@@ -1304,13 +1356,26 @@ async def ingest_event(payload: EventIngestRequest):
             detail=f"Invalid event_type '{payload.event_type}'. Must be one of: {', '.join(EVENT_TYPE_MAP.keys())}",
         )
 
-    if payload.channel < 0 or payload.channel >= nvr_host.num_channels:
+    if payload.channel < 0:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Channel {payload.channel} out of range. NVR channels must be non-negative.",
+        )
+    resolved_channel = _resolve_ingest_channel(payload.channel, payload.camera_name)
+    if resolved_channel < 0 or resolved_channel >= nvr_host.num_channels:
         raise HTTPException(
             status_code=400,
             detail=f"Channel {payload.channel} out of range. NVR has {nvr_host.num_channels} channels (0-based).",
         )
-    if not _channel_is_participating(payload.channel):
-        raise HTTPException(status_code=403, detail=f"Channel {payload.channel} is not enabled in Watchtower.")
+    if not _channel_is_participating(resolved_channel):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"Channel {payload.channel} is not enabled in Watchtower."
+                if resolved_channel == payload.channel
+                else f"Resolved channel {resolved_channel} is not enabled in Watchtower."
+            ),
+        )
 
     try:
         event_timestamp = datetime.fromisoformat(payload.timestamp) if payload.timestamp else datetime.now()
@@ -1324,16 +1389,16 @@ async def ingest_event(payload: EventIngestRequest):
     clip_source = "provided" if clip_url else "local_rtsp"
 
     entry = TimelineEntry(
-        entry_id=payload.event_id or f"{payload.channel}_{event_timestamp.isoformat()}_{event_type}",
+        entry_id=payload.event_id or f"{resolved_channel}_{event_timestamp.isoformat()}_{event_type}",
         timestamp=event_timestamp,
-        channel=payload.channel,
+        channel=resolved_channel,
         event_type=event_type,
         clip_path=clip_url,
         thumbnail_path=payload.snapshot_url,
         metadata={
             **payload.metadata,
             "title": payload.title or f"{event_type.title()} detected",
-            "message": payload.message or f"{event_type.title()} detected on channel {payload.channel}",
+            "message": payload.message or f"{event_type.title()} detected on channel {resolved_channel}",
             "camera_name": payload.camera_name,
             "source": payload.source,
             "snapshot_url": payload.snapshot_url,
@@ -1343,6 +1408,7 @@ async def ingest_event(payload: EventIngestRequest):
             "duration_seconds": payload.duration_seconds,
             "clip_status": clip_status,
             "clip_source": clip_source,
+            "requested_channel": payload.channel,
         },
     )
     entry, created = _upsert_or_merge_timeline_entry(entry)
