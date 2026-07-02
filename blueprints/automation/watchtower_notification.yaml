@@ -5,12 +5,14 @@ blueprint:
     the app timeline, and provide either clip-open or door unlock actions.
   domain: automation
   input:
-    doorbell_sensor:
-      name: Doorbell sensor
-      description: Binary sensor that turns on for a doorbell event.
+    doorbell_sensors:
+      name: Doorbell sensors
+      description: Optional binary sensors that turn on for a doorbell event.
+      default: []
       selector:
         entity:
           domain: binary_sensor
+          multiple: true
     person_sensor:
       name: Person sensor
       description: Binary sensor that turns on for a person event.
@@ -45,12 +47,14 @@ blueprint:
       default: Front Door
       selector:
         text: {}
-    front_door_lock:
-      name: Front door lock
-      description: Lock entity used for the doorbell unlock action.
+    unlock_action:
+      name: Optional unlock action
+      description: >
+        Optional action sequence to run when the doorbell notification unlock
+        button is tapped. Leave this empty for cameras that do not need an
+        unlock action.
       selector:
-        entity:
-          domain: lock
+        action: {}
     camera_channel:
       name: Camera channel
       description: >
@@ -75,20 +79,20 @@ blueprint:
       default: "/app/15e0e6e5_watchtower"
       selector:
         text: {}
-    notify_service_primary:
-      name: Primary notification service
-      description: >
-        Mobile notification service for the first phone, for example
-        `notify.mobile_app_pixel_8_pro`.
+    notify_target_primary:
+      name: Primary notification target
+      description: Notify entity for the first phone.
       selector:
-        text: {}
-    notify_service_secondary:
-      name: Secondary notification service
-      description: >
-        Mobile notification service for the second phone, for example
-        `notify.mobile_app_pixel_10_pro`.
+        target:
+          entity:
+            domain: notify
+    notify_target_secondary:
+      name: Secondary notification target
+      description: Notify entity for the second phone.
       selector:
-        text: {}
+        target:
+          entity:
+            domain: notify
 
 mode: single
 
@@ -99,7 +103,7 @@ triggers:
       action: UNLOCK_DOOR
     id: unlock_door
   - trigger: state
-    entity_id: !input doorbell_sensor
+    entity_id: !input doorbell_sensors
     to: "on"
     id: doorbell
   - trigger: state
@@ -120,10 +124,7 @@ actions:
       - conditions:
           - condition: template
             value_template: "{{ trigger.id == 'unlock_door' }}"
-        sequence:
-          - action: lock.unlock
-            target:
-              entity_id: !input front_door_lock
+        sequence: !input unlock_action
 
       - conditions:
           - condition: template
@@ -133,6 +134,7 @@ actions:
               channel: !input camera_channel
               base_url: !input app_base_url
               cam_name: !input camera_name
+              unlock_actions: !input unlock_action
               event_type: "DOORBELL"
               event_timestamp: "{{ trigger.to_state.last_changed.isoformat() if trigger.to_state is not none else now().isoformat() }}"
               event_id: "{{ channel }}_{{ event_timestamp }}_{{ event_type }}"
@@ -157,6 +159,7 @@ actions:
               app_event_url: "{{ app_target }}?channel={{ channel }}&event_type={{ event_type }}&event_id={{ event_id | urlencode }}"
               notif_title: "🔔 Doorbell"
               msg: "Someone is at the door!"
+              unlock_enabled: "{{ (unlock_actions | count) > 0 }}"
           - action: camera.snapshot
             target:
               entity_id: !input snapshot_camera
@@ -174,32 +177,36 @@ actions:
               title: "{{ notif_title }}"
               message: "{{ msg }}"
               source: "home_assistant"
-          - action: !input notify_service_primary
+          - action: notify.send_message
+            target: !input notify_target_primary
             data:
               title: "{{ notif_title }}"
               message: "{{ msg }}"
               data:
                 image: "{{ snapshot_url }}?v={{ now().timestamp() | int }}"
                 clickAction: "{{ app_event_url }}"
-                actions:
-                  - action: UNLOCK_DOOR
-                    title: Unlock Front Door
-                  - action: URI
-                    title: View Event Clip
-                    uri: "{{ app_event_url }}"
-          - action: !input notify_service_secondary
+                actions: >-
+                  {{ [
+                    {"action": "UNLOCK_DOOR", "title": "Unlock"},
+                    {"action": "URI", "title": "View Event Clip", "uri": app_event_url}
+                  ] if unlock_enabled else [
+                    {"action": "URI", "title": "View Event Clip", "uri": app_event_url}
+                  ] }}
+          - action: notify.send_message
+            target: !input notify_target_secondary
             data:
               title: "{{ notif_title }}"
               message: "{{ msg }}"
               data:
                 image: "{{ snapshot_url }}?v={{ now().timestamp() | int }}"
                 clickAction: "{{ app_event_url }}"
-                actions:
-                  - action: UNLOCK_DOOR
-                    title: Unlock Front Door
-                  - action: URI
-                    title: View Event Clip
-                    uri: "{{ app_event_url }}"
+                actions: >-
+                  {{ [
+                    {"action": "UNLOCK_DOOR", "title": "Unlock"},
+                    {"action": "URI", "title": "View Event Clip", "uri": app_event_url}
+                  ] if unlock_enabled else [
+                    {"action": "URI", "title": "View Event Clip", "uri": app_event_url}
+                  ] }}
 
       - conditions:
           - condition: template
@@ -250,7 +257,8 @@ actions:
               title: "{{ notif_title }}"
               message: "{{ msg }}"
               source: "home_assistant"
-          - action: !input notify_service_primary
+          - action: notify.send_message
+            target: !input notify_target_primary
             data:
               title: "{{ notif_title }}"
               message: "{{ msg }}"
@@ -261,7 +269,8 @@ actions:
                   - action: URI
                     title: View Event Clip
                     uri: "{{ app_event_url }}"
-          - action: !input notify_service_secondary
+          - action: notify.send_message
+            target: !input notify_target_secondary
             data:
               title: "{{ notif_title }}"
               message: "{{ msg }}"
@@ -322,7 +331,8 @@ actions:
               title: "{{ notif_title }}"
               message: "{{ msg }}"
               source: "home_assistant"
-          - action: !input notify_service_primary
+          - action: notify.send_message
+            target: !input notify_target_primary
             data:
               title: "{{ notif_title }}"
               message: "{{ msg }}"
@@ -333,7 +343,8 @@ actions:
                   - action: URI
                     title: View Event Clip
                     uri: "{{ app_event_url }}"
-          - action: !input notify_service_secondary
+          - action: notify.send_message
+            target: !input notify_target_secondary
             data:
               title: "{{ notif_title }}"
               message: "{{ msg }}"
@@ -394,7 +405,8 @@ actions:
               title: "{{ notif_title }}"
               message: "{{ msg }}"
               source: "home_assistant"
-          - action: !input notify_service_primary
+          - action: notify.send_message
+            target: !input notify_target_primary
             data:
               title: "{{ notif_title }}"
               message: "{{ msg }}"
@@ -405,7 +417,8 @@ actions:
                   - action: URI
                     title: View Event Clip
                     uri: "{{ app_event_url }}"
-          - action: !input notify_service_secondary
+          - action: notify.send_message
+            target: !input notify_target_secondary
             data:
               title: "{{ notif_title }}"
               message: "{{ msg }}"

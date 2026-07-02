@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.49
+
+- Replace the blueprint's plain-text notification fields with notify-target selectors backed by `notify.send_message`, so phones can be chosen from the UI instead of typing service ids.
+
+## 0.4.48
+
+- Make the notification blueprint less front-door-specific by allowing empty doorbell sensors and replacing the required lock entity with an optional unlock action sequence.
+
 ## 0.4.47
 
 - Fix the Home Assistant notification blueprint import by replacing unsupported `service` selectors with text inputs for notify service ids.

@@ -77,13 +77,13 @@ https://raw.githubusercontent.com/marcusmaday/reolink-nvr-watchtower/main/bluepr
 
 Then create an automation from the blueprint and choose:
 
-1. Your doorbell sensor
+1. Optional doorbell sensors
 2. Your person sensor
 3. Optional animal sensors
 4. Optional vehicle sensors
 5. Your snapshot camera
-6. Your front door lock
-7. Your two mobile notify services, such as `notify.mobile_app_pixel_8_pro`
+6. Optional unlock action for the doorbell camera
+7. Your two mobile notification targets
 8. Your app navigation path or URL
 
 Recommended value:
@@ -101,7 +101,8 @@ The blueprint handles:
 - `PERSON`, `DOORBELL`, optional `ANIMAL`, and optional `VEHICLE` notifications for that camera
 - tap-to-open event clips
 - tap-to-open live view
-- `UNLOCK_DOOR` for doorbell notifications
+- optional unlock actions for doorbell notifications
+- notify-target selection from the Home Assistant UI
 
 ## 5. Add The Relay Command To Home Assistant
 

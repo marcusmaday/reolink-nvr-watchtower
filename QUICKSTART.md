@@ -61,13 +61,13 @@ https://raw.githubusercontent.com/marcusmaday/reolink-nvr-watchtower/main/bluepr
 
 Create the automation from the blueprint and choose:
 
-- doorbell sensor
+- optional doorbell sensors
 - person sensor
 - optional animal sensors
 - optional vehicle sensors
 - snapshot camera
-- front door lock
-- two notify service ids such as `notify.mobile_app_pixel_8_pro`
+- optional unlock action for the doorbell camera
+- two mobile notification targets
 - app navigation path or URL
 
 Recommended value:
