@@ -53,6 +53,7 @@ blueprint:
         Optional action sequence to run when the doorbell notification unlock
         button is tapped. Leave this empty for cameras that do not need an
         unlock action.
+      default: []
       selector:
         action: {}
     camera_channel:

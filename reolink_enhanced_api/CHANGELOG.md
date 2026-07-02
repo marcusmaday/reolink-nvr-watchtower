@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.50
+
+- Make the blueprint unlock action truly optional by defaulting it to an empty action list, so non-doorbell cameras no longer need a placeholder unlock step.
+
 ## 0.4.49
 
 - Replace the blueprint's plain-text notification fields with notify-target selectors backed by `notify.send_message`, so phones can be chosen from the UI instead of typing service ids.
