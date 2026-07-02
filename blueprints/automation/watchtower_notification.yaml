@@ -77,16 +77,18 @@ blueprint:
         text: {}
     notify_service_primary:
       name: Primary notification service
-      description: Mobile notification service for the first phone.
+      description: >
+        Mobile notification service for the first phone, for example
+        `notify.mobile_app_pixel_8_pro`.
       selector:
-        service:
-          domain: notify
+        text: {}
     notify_service_secondary:
       name: Secondary notification service
-      description: Mobile notification service for the second phone.
+      description: >
+        Mobile notification service for the second phone, for example
+        `notify.mobile_app_pixel_10_pro`.
       selector:
-        service:
-          domain: notify
+        text: {}
 
 mode: single
 

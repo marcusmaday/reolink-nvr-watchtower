@@ -83,7 +83,7 @@ Then create an automation from the blueprint and choose:
 4. Optional vehicle sensors
 5. Your snapshot camera
 6. Your front door lock
-7. Your two mobile notify services
+7. Your two mobile notify services, such as `notify.mobile_app_pixel_8_pro`
 8. Your app navigation path or URL
 
 Recommended value:

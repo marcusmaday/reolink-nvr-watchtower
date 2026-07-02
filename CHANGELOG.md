@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.47
+
+- Fix the Home Assistant notification blueprint import by replacing unsupported `service` selectors with text inputs for notify service ids.
+
 ## 0.4.46
 
 - Add per-camera event-type configuration so each participating channel can allow only the event types that matter, such as `PERSON,DOORBELL` for the front door and `PERSON,ANIMAL` for the backyard.
