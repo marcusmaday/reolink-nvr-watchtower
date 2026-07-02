@@ -91,9 +91,10 @@ EXTERNAL_STORAGE_PATH = APP_CONFIG.storage.external_storage_path
 WATCH_CHANNELS_CONFIG = APP_CONFIG.video_buffer.watch_channels
 BUFFER_CHANNELS_CONFIG = APP_CONFIG.video_buffer.buffer_channels
 DEFAULT_LIVE_CHANNEL_CONFIG = APP_CONFIG.video_buffer.default_live_channel
+CAMERA_EVENT_TYPES_CONFIG = APP_CONFIG.video_buffer.camera_event_types
 
 logger.info(
-    "Clip timing configured: before=%ss after=%ss local_clip=%ss buffer_retention=%ss absolute_buffer_cap=%ss buffer_retries=%d delay=%ss dedupe_window=%ss watch_channels=%s buffer_channels=%s default_live_channel=%s",
+    "Clip timing configured: before=%ss after=%ss local_clip=%ss buffer_retention=%ss absolute_buffer_cap=%ss buffer_retries=%d delay=%ss dedupe_window=%ss watch_channels=%s buffer_channels=%s default_live_channel=%s camera_event_types=%s",
     CLIP_DURATION_BEFORE,
     CLIP_DURATION_AFTER,
     LOCAL_CLIP_SECONDS,
@@ -105,6 +106,7 @@ logger.info(
     WATCH_CHANNELS_CONFIG,
     BUFFER_CHANNELS_CONFIG or "watch_channels",
     DEFAULT_LIVE_CHANNEL_CONFIG if DEFAULT_LIVE_CHANNEL_CONFIG is not None else "auto",
+    CAMERA_EVENT_TYPES_CONFIG or "all",
 )
 
 # Global NVR host instance
@@ -119,6 +121,7 @@ available_channels: list[dict[str, Any]] = []
 participating_channels: set[int] = set()
 buffered_channels: set[int] = set()
 default_live_channel: Optional[int] = None
+allowed_event_types_by_channel: dict[int, set[str]] = {}
 
 
 # ─── Pydantic models ──────────────────────────────────────────────────────────
@@ -151,6 +154,7 @@ class ChannelInfo(BaseModel):
     participating: bool = False
     buffered: bool = False
     default_live: bool = False
+    allowed_event_types: list[str] = Field(default_factory=list)
 
 
 class DeviceInfo(BaseModel):
@@ -167,6 +171,7 @@ class CameraSelectionInfo(BaseModel):
     participating_channels: list[int]
     buffered_channels: list[int]
     default_live_channel: Optional[int] = None
+    supported_event_types: list[str] = Field(default_factory=list)
 
 
 class HealthCheck(BaseModel):
@@ -251,8 +256,96 @@ def _sorted_channels(channels: set[int]) -> list[int]:
     return sorted(channels)
 
 
+def _supported_event_types() -> list[str]:
+    return list(EVENT_TYPE_MAP.keys())
+
+
+def _default_event_type_set() -> set[str]:
+    return set(_supported_event_types())
+
+
+def _sorted_event_types(event_types: set[str]) -> list[str]:
+    order = {name: index for index, name in enumerate(_supported_event_types())}
+    return sorted(event_types, key=lambda item: order.get(item, len(order)))
+
+
 def _normalize_camera_name(name: Optional[str]) -> str:
     return (name or "").strip().casefold()
+
+
+def _parse_camera_event_type_selection(
+    raw_value: Optional[str],
+    valid_channels: set[int],
+) -> dict[int, set[str]]:
+    default_event_types = _default_event_type_set()
+    allowed: dict[int, set[str]] = {channel: set(default_event_types) for channel in valid_channels}
+
+    raw = (raw_value or "").strip()
+    if not raw or raw.lower() == "all":
+        return allowed
+
+    default_override: Optional[set[str]] = None
+    channel_overrides: dict[int, set[str]] = {}
+
+    for chunk in raw.split(";"):
+        token = chunk.strip()
+        if not token:
+            continue
+        if ":" not in token:
+            logger.warning(
+                "Ignoring invalid camera_event_types token '%s'. Expected format like 'all:PERSON,DOORBELL;1:PERSON,ANIMAL'.",
+                token,
+            )
+            continue
+
+        channel_token, event_tokens = token.split(":", 1)
+        channel_key = channel_token.strip().lower()
+        parsed_event_types: set[str] = set()
+        for raw_event_type in event_tokens.split(","):
+            normalized = _normalize_event_type(raw_event_type)
+            if normalized is None:
+                cleaned = raw_event_type.strip()
+                if cleaned:
+                    logger.warning("Ignoring invalid event type '%s' in camera_event_types", cleaned)
+                continue
+            parsed_event_types.add(normalized)
+
+        if not parsed_event_types:
+            logger.warning("Ignoring camera_event_types token '%s' because it did not contain any valid event types", token)
+            continue
+
+        if channel_key == "all":
+            default_override = parsed_event_types
+            continue
+
+        try:
+            channel = int(channel_key)
+        except ValueError:
+            logger.warning("Ignoring invalid channel '%s' in camera_event_types", channel_token.strip())
+            continue
+        if channel not in valid_channels:
+            logger.warning("Ignoring camera_event_types override for unavailable channel %s", channel)
+            continue
+        channel_overrides[channel] = parsed_event_types
+
+    if default_override is not None:
+        allowed = {channel: set(default_override) for channel in valid_channels}
+
+    for channel, event_types in channel_overrides.items():
+        allowed[channel] = set(event_types)
+
+    return allowed
+
+
+def _channel_allowed_event_types(channel: int) -> set[str]:
+    return allowed_event_types_by_channel.get(channel, _default_event_type_set())
+
+
+def _channel_allows_event_type(channel: int, event_type: Optional[str]) -> bool:
+    normalized = _normalize_event_type(event_type)
+    if normalized is None:
+        return False
+    return normalized in _channel_allowed_event_types(channel)
 
 
 def _resolve_ingest_channel(payload_channel: int, camera_name: Optional[str]) -> int:
@@ -320,6 +413,7 @@ def _channel_info_payload(channel_info: dict[str, Any]) -> ChannelInfo:
         participating=channel in participating_channels,
         buffered=channel in buffered_channels,
         default_live=channel == default_live_channel,
+        allowed_event_types=_sorted_event_types(_channel_allowed_event_types(channel)) if channel in participating_channels else [],
     )
 
 
@@ -349,7 +443,7 @@ async def _rolling_buffer_monitor_loop() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global nvr_host, timeline_index, rolling_buffers, rolling_buffer_monitor_task, storage_manager
-    global available_channels, participating_channels, buffered_channels, default_live_channel
+    global available_channels, participating_channels, buffered_channels, default_live_channel, allowed_event_types_by_channel
 
     logger.info("Starting Watchtower...")
     logger.info("Connecting to NVR at %s:%s", NVR_HOST, NVR_PORT)
@@ -369,6 +463,10 @@ async def lifespan(app: FastAPI):
         participating_channels = _parse_channel_selection(WATCH_CHANNELS_CONFIG, valid_channels)
         buffered_channels = _parse_channel_selection(BUFFER_CHANNELS_CONFIG, valid_channels, fallback=participating_channels)
         buffered_channels &= participating_channels
+        allowed_event_types_by_channel = _parse_camera_event_type_selection(
+            CAMERA_EVENT_TYPES_CONFIG,
+            participating_channels,
+        )
         default_live_channel = _resolve_default_live_channel()
         logger.info(
             "Available enabled cameras: %s",
@@ -388,6 +486,13 @@ async def lifespan(app: FastAPI):
             _sorted_channels(buffered_channels),
             default_live_channel if default_live_channel is not None else "none",
         )
+        logger.info(
+            "Camera event types resolved: %s",
+            {
+                channel: _sorted_event_types(_channel_allowed_event_types(channel))
+                for channel in _sorted_channels(participating_channels)
+            },
+        )
     except ReolinkError as e:
         logger.error("Failed to connect to NVR: %s", e)
         nvr_host = None
@@ -395,6 +500,7 @@ async def lifespan(app: FastAPI):
         participating_channels = set()
         buffered_channels = set()
         default_live_channel = None
+        allowed_event_types_by_channel = {}
     except Exception as e:
         logger.error("Unexpected error during startup: %s", e)
         nvr_host = None
@@ -402,6 +508,7 @@ async def lifespan(app: FastAPI):
         participating_channels = set()
         buffered_channels = set()
         default_live_channel = None
+        allowed_event_types_by_channel = {}
 
     timeline_index = TimelineIndex(index_file=INDEX_FILE)
     logger.info("Timeline index initialized at %s", INDEX_FILE)
@@ -475,7 +582,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title=APP_NAME,
     description="Camera event dashboard, clip playback, and live view for a Reolink NVR",
-    version="0.4.45",
+    version="0.4.46",
     lifespan=lifespan,
 )
 
@@ -631,8 +738,10 @@ def _parse_onvif_event_notifications(data: str) -> list[dict[str, Any]]:
         if channel is None:
             continue
 
-        if rule in {"PeopleDetect", "FaceDetect", "DogCatDetect", "Package"}:
+        if rule in {"PeopleDetect", "FaceDetect", "Package"}:
             event_type = "PERSON"
+        elif rule == "DogCatDetect":
+            event_type = "ANIMAL"
         elif rule == "Visitor":
             event_type = "DOORBELL"
         elif rule in {"Motion", "MotionAlarm"}:
@@ -690,6 +799,8 @@ def _create_event_entry(
 
 async def _broadcast_recent_event(entry: TimelineEntry):
     if not ui_clients:
+        return
+    if not _channel_is_participating(entry.channel) or not _channel_allows_event_type(entry.channel, entry.event_type):
         return
 
     payload = {
@@ -1106,7 +1217,7 @@ async def root(request: Request):
         return HTMLResponse(_dashboard_html())
     return {
         "name": APP_NAME,
-        "version": "0.4.45",
+        "version": "0.4.46",
         "status": "running",
         "docs": "/docs",
         "health": "/api/health",
@@ -1148,6 +1259,7 @@ async def get_camera_config():
         participating_channels=_sorted_channels(participating_channels),
         buffered_channels=_sorted_channels(buffered_channels),
         default_live_channel=default_live_channel,
+        supported_event_types=_supported_event_types(),
     )
 
 
@@ -1215,6 +1327,11 @@ async def search(
                 status_code=400,
                 detail=f"Invalid event_type '{event_type}'. Must be one of: {', '.join(EVENT_TYPE_MAP.keys())}",
             )
+        if not _channel_allows_event_type(channel, event_type_upper):
+            raise HTTPException(
+                status_code=403,
+                detail=f"Event type '{event_type_upper}' is not enabled for channel {channel} in Watchtower.",
+            )
         event_type = event_type_upper
 
     # Validate stream
@@ -1244,7 +1361,7 @@ async def search(
         logger.exception("Unexpected error during search")
         raise HTTPException(status_code=500, detail=str(e))
 
-    clips = [Clip(**c) for c in raw_clips]
+    clips = [Clip(**c) for c in raw_clips if _channel_allows_event_type(channel, c.get("event_type"))]
 
     for clip in clips:
         if _normalize_event_type(clip.event_type) is None:
@@ -1296,18 +1413,26 @@ async def get_timeline(
         )
     if channel is not None and not _channel_is_participating(channel):
         raise HTTPException(status_code=403, detail=f"Channel {channel} is not enabled in Watchtower.")
+    normalized_event_type = _normalize_event_type(event_type)
+    if channel is not None and normalized_event_type is not None and not _channel_allows_event_type(channel, normalized_event_type):
+        raise HTTPException(
+            status_code=403,
+            detail=f"Event type '{normalized_event_type}' is not enabled for channel {channel} in Watchtower.",
+        )
     entries = timeline_index.get_entries(
         channel=channel,
-        event_type=_normalize_event_type(event_type),
+        event_type=normalized_event_type,
         since=datetime.now() - __import__('datetime').timedelta(hours=hours),
         limit=limit if channel is not None else max(limit * 5, limit),
     )
-    if channel is None:
-        entries = [entry for entry in entries if _channel_is_participating(entry.channel)]
+    entries = [
+        entry for entry in entries
+        if _channel_is_participating(entry.channel) and _channel_allows_event_type(entry.channel, entry.event_type)
+    ]
     return {
         "hours": hours,
         "channel": channel,
-        "event_type": event_type,
+        "event_type": normalized_event_type,
         "total": len(entries),
         "entries": [e.to_dict() for e in entries],
     }
@@ -1328,13 +1453,20 @@ async def get_recent_events(
         )
     if channel is not None and not _channel_is_participating(channel):
         raise HTTPException(status_code=403, detail=f"Channel {channel} is not enabled in Watchtower.")
+    if channel is not None and normalized_event_type is not None and not _channel_allows_event_type(channel, normalized_event_type):
+        raise HTTPException(
+            status_code=403,
+            detail=f"Event type '{normalized_event_type}' is not enabled for channel {channel} in Watchtower.",
+        )
     entries = timeline_index.get_entries(
         channel=channel,
         event_type=normalized_event_type,
         limit=limit if channel is not None else max(limit * 5, limit),
     )
-    if channel is None:
-        entries = [entry for entry in entries if _channel_is_participating(entry.channel)]
+    entries = [
+        entry for entry in entries
+        if _channel_is_participating(entry.channel) and _channel_allows_event_type(entry.channel, entry.event_type)
+    ]
     return {
         "limit": limit,
         "channel": channel,
@@ -1375,6 +1507,11 @@ async def ingest_event(payload: EventIngestRequest):
                 if resolved_channel == payload.channel
                 else f"Resolved channel {resolved_channel} is not enabled in Watchtower."
             ),
+        )
+    if not _channel_allows_event_type(resolved_channel, event_type):
+        raise HTTPException(
+            status_code=403,
+            detail=f"Event type '{event_type}' is not enabled for channel {resolved_channel} in Watchtower.",
         )
 
     try:
@@ -1445,6 +1582,10 @@ async def receive_reolink_webhook(request: Request):
     for parsed in parsed_events:
         if event_channels and parsed["channel"] not in event_channels:
             continue
+        if not _channel_is_participating(parsed["channel"]):
+            continue
+        if not _channel_allows_event_type(parsed["channel"], parsed["event_type"]):
+            continue
         camera_name = None
         try:
             camera_name = nvr_host.camera_name(parsed["channel"])
@@ -1474,6 +1615,8 @@ async def receive_reolink_webhook(request: Request):
 async def get_timeline_entry(entry_id: str):
     entry = timeline_index.get_entry(entry_id)
     if not entry:
+        raise HTTPException(status_code=404, detail=f"Timeline entry '{entry_id}' not found")
+    if not _channel_is_participating(entry.channel) or not _channel_allows_event_type(entry.channel, entry.event_type):
         raise HTTPException(status_code=404, detail=f"Timeline entry '{entry_id}' not found")
     return _timeline_entry_to_recent(entry)
 
@@ -1930,17 +2073,13 @@ def _dashboard_html() -> str:
   <header>
     <div>
       <h1>Watchtower</h1>
-      <div class="meta">Recent doorbell and person events with player-first playback</div>
+      <div class="meta">Recent camera events with player-first playback</div>
     </div>
     <div class="meta" id="status">Connecting…</div>
   </header>
   <main>
     <aside>
-      <div class="toolbar">
-        <button class="chip active" data-filter="ALL">All</button>
-        <button class="chip" data-filter="PERSON">Person</button>
-        <button class="chip" data-filter="DOORBELL">Doorbell</button>
-      </div>
+      <div class="toolbar" id="eventFilters"></div>
       <div class="toolbar" id="cameraFilters">
         <button class="chip active" data-channel-filter="ALL">All Cameras</button>
       </div>
@@ -1964,11 +2103,19 @@ def _dashboard_html() -> str:
     </section>
   </main>
   <script>
-    const state = { events: [], channels: [], filter: 'ALL', channel: 'ALL', selected: null, socket: null, defaultLiveChannel: null };
+    const knownEventTypes = ['PERSON', 'DOORBELL', 'MOTION', 'ANIMAL', 'VEHICLE'];
+    const eventTypeLabels = {
+      PERSON: 'Person',
+      DOORBELL: 'Doorbell',
+      MOTION: 'Motion',
+      ANIMAL: 'Animal',
+      VEHICLE: 'Vehicle',
+    };
+    const state = { events: [], channels: [], supportedEventTypes: knownEventTypes, filter: 'ALL', channel: 'ALL', selected: null, socket: null, defaultLiveChannel: null };
     const deepLink = new URLSearchParams(window.location.search);
     const requestedEventType = (() => {
       const raw = (deepLink.get('event_type') || '').trim().toUpperCase();
-      return ['PERSON', 'DOORBELL'].includes(raw) ? raw : null;
+      return knownEventTypes.includes(raw) ? raw : null;
     })();
     const requestedChannel = (() => {
       const raw = (deepLink.get('channel') || '').trim();
@@ -1982,6 +2129,7 @@ def _dashboard_html() -> str:
     const elEvents = document.getElementById('events');
     const elCount = document.getElementById('count');
     const elStatus = document.getElementById('status');
+    const elEventFilters = document.getElementById('eventFilters');
     const elCameraFilters = document.getElementById('cameraFilters');
     const elOpenLive = document.getElementById('openLive');
     const player = document.getElementById('player');
@@ -2000,6 +2148,24 @@ def _dashboard_html() -> str:
 
     function badgeClass(eventType) {
       return eventType === 'DOORBELL' ? 'badge doorbell' : 'badge';
+    }
+
+    function renderEventFilters() {
+      const enabledEventTypes = state.supportedEventTypes.filter(eventType =>
+        state.channels.some(info => (info.allowed_event_types || []).includes(eventType))
+      );
+      if (state.filter !== 'ALL' && !enabledEventTypes.includes(state.filter)) {
+        state.filter = 'ALL';
+      }
+      const buttons = [
+        `<button class="chip ${state.filter === 'ALL' ? 'active' : ''}" data-filter="ALL">All</button>`,
+        ...enabledEventTypes.map(eventType => `
+          <button class="chip ${state.filter === eventType ? 'active' : ''}" data-filter="${eventType}">
+            ${escapeHtml(eventTypeLabels[eventType] || eventType)}
+          </button>
+        `),
+      ];
+      elEventFilters.innerHTML = buttons.join('');
     }
 
     function formatTime(ts) {
@@ -2061,6 +2227,7 @@ def _dashboard_html() -> str:
     }
 
     function render() {
+      renderEventFilters();
       renderChannelFilters();
       const events = visibleEvents();
       elCount.textContent = `${events.length} event${events.length === 1 ? '' : 's'}`;
@@ -2086,10 +2253,12 @@ def _dashboard_html() -> str:
       const resp = await fetch(apiUrl('api/camera-config'), { cache: 'no-store' });
       const data = await resp.json();
       state.channels = (data.available_channels || []).filter(info => info.participating);
+      state.supportedEventTypes = data.supported_event_types || knownEventTypes;
       state.defaultLiveChannel = data.default_live_channel;
       if (state.channel !== 'ALL' && !state.channels.find(info => info.channel === state.channel)) {
         state.channel = 'ALL';
       }
+      renderEventFilters();
       renderChannelFilters();
       updateLiveLink();
     }
@@ -2280,9 +2449,13 @@ async def debug_info():
             "participating_channels": _sorted_channels(participating_channels),
             "buffered_channels": _sorted_channels(buffered_channels),
             "default_live_channel": default_live_channel,
+            "camera_event_types": {
+                str(channel): _sorted_event_types(_channel_allowed_event_types(channel))
+                for channel in _sorted_channels(participating_channels)
+            },
         },
         "rolling_buffers": {str(channel): buffer.get_stats() for channel, buffer in rolling_buffers.items()},
-        "supported_event_types": list(EVENT_TYPE_MAP.keys()),
+        "supported_event_types": _supported_event_types(),
     }
 
 

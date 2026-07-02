@@ -30,7 +30,7 @@ Returns the list of available channels and their names, plus whether each one is
 
 ### `GET /api/camera-config`
 
-Returns the resolved Watchtower camera selection: available channels, participating channels, buffered channels, and the default live camera.
+Returns the resolved Watchtower camera selection: available channels, participating channels, buffered channels, each camera's allowed event types, the supported event-type list, and the default live camera.
 
 ### `GET /api/debug/info`
 
@@ -45,7 +45,6 @@ Search recordings on the NVR.
 Parameters:
 
 - `channel` required, zero-based channel number
-- `camera_name` strongly recommended for Home Assistant relays so Watchtower can correct channel-numbering mismatches automatically
 - `start_date` required, format `YYYY-MM-DD`
 - `end_date` optional, defaults to `start_date`
 - `event_type` optional, one of `DOORBELL`, `PERSON`, `MOTION`, `ANIMAL`, `VEHICLE`
@@ -99,6 +98,12 @@ Parameters:
 Creates a timeline entry from Home Assistant or another source.
 
 This is the relay endpoint used by the Home Assistant notification flow.
+
+Notes:
+
+- `channel` uses the Watchtower zero-based channel index
+- `camera_name` is strongly recommended for Home Assistant relays so Watchtower can correct channel-numbering mismatches automatically
+- events are rejected with `403` if that event type is not enabled for the resolved camera in Watchtower
 
 ### `GET /api/events/{entry_id}/clip`
 

@@ -35,6 +35,7 @@ class VideoBufferConfig:
     watch_channels: str
     buffer_channels: str
     default_live_channel: Optional[int]
+    camera_event_types: str
 
 
 @dataclass
@@ -97,6 +98,7 @@ def get_config() -> AppConfig:
     default_live_channel = int(default_live_channel_raw) if default_live_channel_raw else None
     if default_live_channel is not None and default_live_channel < 0:
         default_live_channel = None
+    camera_event_types = os.getenv("CAMERA_EVENT_TYPES", "")
 
     video_buffer_config = VideoBufferConfig(
         enabled=buffer_enabled,
@@ -107,6 +109,7 @@ def get_config() -> AppConfig:
         watch_channels=watch_channels,
         buffer_channels=buffer_channels,
         default_live_channel=default_live_channel,
+        camera_event_types=camera_event_types,
     )
 
     # ─── Storage Configuration ───
@@ -164,13 +167,14 @@ def _log_config(config: AppConfig):
     logger.info("NVR: %s:%d (SSL: %s)", config.nvr.host, config.nvr.port, config.nvr.use_https)
     logger.info("Username: %s", config.nvr.username)
     logger.info(
-        "Video Buffer: enabled=%s, size=%ds, clip_quality=%s, watch_channels=%s, buffer_channels=%s, default_live_channel=%s",
+        "Video Buffer: enabled=%s, size=%ds, clip_quality=%s, watch_channels=%s, buffer_channels=%s, default_live_channel=%s, camera_event_types=%s",
         config.video_buffer.enabled,
         config.video_buffer.buffer_size_seconds,
         config.video_buffer.clip_quality,
         config.video_buffer.watch_channels,
         config.video_buffer.buffer_channels or "watch_channels",
         config.video_buffer.default_live_channel if config.video_buffer.default_live_channel is not None else "auto",
+        config.video_buffer.camera_event_types or "all",
     )
     logger.info("Clips Directory: %s", config.storage.clips_directory)
     logger.info(

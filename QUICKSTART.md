@@ -34,6 +34,7 @@ clip_quality: medium
 watch_channels: "all"
 buffer_channels: ""
 default_live_channel: -1
+camera_event_types: ""
 retention_days: 7
 max_storage_mb: 5000
 external_storage_path: ""
@@ -48,6 +49,7 @@ Camera selection notes:
 - `watch_channels` controls which NVR channels appear in Watchtower. Use `all` or a comma-separated list like `0,1,8`.
 - `buffer_channels` controls which of those cameras keep rolling pre-roll buffers for local clip generation. Leave it blank to match `watch_channels`.
 - `default_live_channel` controls which camera opens when the app needs a fallback live view. Use `-1` to pick the first participating camera automatically.
+- `camera_event_types` lets you limit each camera to the event types you care about. Example: `all:PERSON;0:PERSON,VEHICLE;1:PERSON,ANIMAL;8:PERSON,DOORBELL`.
 
 ## 3. Import The Blueprint
 
@@ -61,6 +63,8 @@ Create the automation from the blueprint and choose:
 
 - doorbell sensor
 - person sensor
+- optional animal sensors
+- optional vehicle sensors
 - snapshot camera
 - front door lock
 - two `notify` services

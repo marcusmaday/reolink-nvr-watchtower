@@ -1,8 +1,8 @@
 blueprint:
   name: Watchtower Notification Actions
   description: >
-    Send thumbnail-based PERSON and DOORBELL notifications, relay events into
-    the app timeline, and provide either live view or door unlock actions.
+    Send thumbnail-based camera notifications, relay supported event types into
+    the app timeline, and provide either clip-open or door unlock actions.
   domain: automation
   input:
     doorbell_sensor:
@@ -17,6 +17,22 @@ blueprint:
       selector:
         entity:
           domain: binary_sensor
+    animal_sensors:
+      name: Animal sensors
+      description: Optional binary sensors that turn on for an animal event.
+      default: []
+      selector:
+        entity:
+          domain: binary_sensor
+          multiple: true
+    vehicle_sensors:
+      name: Vehicle sensors
+      description: Optional binary sensors that turn on for a vehicle event.
+      default: []
+      selector:
+        entity:
+          domain: binary_sensor
+          multiple: true
     snapshot_camera:
       name: Snapshot camera
       description: Camera entity used to capture the notification thumbnail.
@@ -88,6 +104,14 @@ triggers:
     entity_id: !input person_sensor
     to: "on"
     id: person
+  - trigger: state
+    entity_id: !input animal_sensors
+    to: "on"
+    id: animal
+  - trigger: state
+    entity_id: !input vehicle_sensors
+    to: "on"
+    id: vehicle
 
 actions:
   - choose:
@@ -207,6 +231,150 @@ actions:
               app_event_url: "{{ app_target }}?channel={{ channel }}&event_type={{ event_type }}&event_id={{ event_id | urlencode }}"
               notif_title: "👤 Person Detected"
               msg: "Person detected at the front door."
+          - action: camera.snapshot
+            target:
+              entity_id: !input snapshot_camera
+            data:
+              filename: "{{ snapshot_file }}"
+          - delay: "00:00:01"
+          - action: rest_command.reolink_ingest_event
+            data:
+              event_id: "{{ event_id }}"
+              event_type: "{{ event_type }}"
+              channel: "{{ channel }}"
+              timestamp: "{{ event_timestamp }}"
+              camera_name: "{{ cam_name }}"
+              snapshot_url: "{{ snapshot_url }}"
+              title: "{{ notif_title }}"
+              message: "{{ msg }}"
+              source: "home_assistant"
+          - action: !input notify_service_primary
+            data:
+              title: "{{ notif_title }}"
+              message: "{{ msg }}"
+              data:
+                image: "{{ snapshot_url }}?v={{ now().timestamp() | int }}"
+                clickAction: "{{ app_event_url }}"
+                actions:
+                  - action: URI
+                    title: View Event Clip
+                    uri: "{{ app_event_url }}"
+          - action: !input notify_service_secondary
+            data:
+              title: "{{ notif_title }}"
+              message: "{{ msg }}"
+              data:
+                image: "{{ snapshot_url }}?v={{ now().timestamp() | int }}"
+                clickAction: "{{ app_event_url }}"
+                actions:
+                  - action: URI
+                    title: View Event Clip
+                    uri: "{{ app_event_url }}"
+
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.id == 'animal' }}"
+        sequence:
+          - variables:
+              channel: !input camera_channel
+              base_url: !input app_base_url
+              cam_name: !input camera_name
+              event_type: "ANIMAL"
+              event_timestamp: "{{ trigger.to_state.last_changed.isoformat() if trigger.to_state is not none else now().isoformat() }}"
+              event_id: "{{ channel }}_{{ event_timestamp }}_{{ event_type }}"
+              snapshot_file: "/config/www/tmp/doorbell_snapshot_{{ trigger.id }}.jpg"
+              snapshot_url: "/local/tmp/doorbell_snapshot_{{ trigger.id }}.jpg"
+              app_target: >-
+                {% set raw = (base_url | string | trim) %}
+                {% if raw.startswith('homeassistant://') %}
+                  {{ raw }}
+                {% elif '://' in raw %}
+                  {% set host_and_path = raw.split('://', 1)[1] %}
+                  {% if '/' in host_and_path %}
+                    {{ 'homeassistant://navigate/' ~ host_and_path.split('/', 1)[1] }}
+                  {% else %}
+                    {{ 'homeassistant://navigate/' }}
+                  {% endif %}
+                {% elif raw.startswith('/') %}
+                  {{ 'homeassistant://navigate' ~ raw }}
+                {% else %}
+                  {{ 'homeassistant://navigate/' ~ raw }}
+                {% endif %}
+              app_event_url: "{{ app_target }}?channel={{ channel }}&event_type={{ event_type }}&event_id={{ event_id | urlencode }}"
+              notif_title: "Animal Detected"
+              msg: "Animal detected at {{ cam_name }}."
+          - action: camera.snapshot
+            target:
+              entity_id: !input snapshot_camera
+            data:
+              filename: "{{ snapshot_file }}"
+          - delay: "00:00:01"
+          - action: rest_command.reolink_ingest_event
+            data:
+              event_id: "{{ event_id }}"
+              event_type: "{{ event_type }}"
+              channel: "{{ channel }}"
+              timestamp: "{{ event_timestamp }}"
+              camera_name: "{{ cam_name }}"
+              snapshot_url: "{{ snapshot_url }}"
+              title: "{{ notif_title }}"
+              message: "{{ msg }}"
+              source: "home_assistant"
+          - action: !input notify_service_primary
+            data:
+              title: "{{ notif_title }}"
+              message: "{{ msg }}"
+              data:
+                image: "{{ snapshot_url }}?v={{ now().timestamp() | int }}"
+                clickAction: "{{ app_event_url }}"
+                actions:
+                  - action: URI
+                    title: View Event Clip
+                    uri: "{{ app_event_url }}"
+          - action: !input notify_service_secondary
+            data:
+              title: "{{ notif_title }}"
+              message: "{{ msg }}"
+              data:
+                image: "{{ snapshot_url }}?v={{ now().timestamp() | int }}"
+                clickAction: "{{ app_event_url }}"
+                actions:
+                  - action: URI
+                    title: View Event Clip
+                    uri: "{{ app_event_url }}"
+
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.id == 'vehicle' }}"
+        sequence:
+          - variables:
+              channel: !input camera_channel
+              base_url: !input app_base_url
+              cam_name: !input camera_name
+              event_type: "VEHICLE"
+              event_timestamp: "{{ trigger.to_state.last_changed.isoformat() if trigger.to_state is not none else now().isoformat() }}"
+              event_id: "{{ channel }}_{{ event_timestamp }}_{{ event_type }}"
+              snapshot_file: "/config/www/tmp/doorbell_snapshot_{{ trigger.id }}.jpg"
+              snapshot_url: "/local/tmp/doorbell_snapshot_{{ trigger.id }}.jpg"
+              app_target: >-
+                {% set raw = (base_url | string | trim) %}
+                {% if raw.startswith('homeassistant://') %}
+                  {{ raw }}
+                {% elif '://' in raw %}
+                  {% set host_and_path = raw.split('://', 1)[1] %}
+                  {% if '/' in host_and_path %}
+                    {{ 'homeassistant://navigate/' ~ host_and_path.split('/', 1)[1] }}
+                  {% else %}
+                    {{ 'homeassistant://navigate/' }}
+                  {% endif %}
+                {% elif raw.startswith('/') %}
+                  {{ 'homeassistant://navigate' ~ raw }}
+                {% else %}
+                  {{ 'homeassistant://navigate/' ~ raw }}
+                {% endif %}
+              app_event_url: "{{ app_target }}?channel={{ channel }}&event_type={{ event_type }}&event_id={{ event_id | urlencode }}"
+              notif_title: "Vehicle Detected"
+              msg: "Vehicle detected at {{ cam_name }}."
           - action: camera.snapshot
             target:
               entity_id: !input snapshot_camera

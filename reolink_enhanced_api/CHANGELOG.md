@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.46
+
+- Add per-camera event-type configuration so each participating channel can allow only the event types that matter, such as `PERSON,DOORBELL` for the front door and `PERSON,ANIMAL` for the backyard.
+- Enforce allowed event types across event ingest, webhook handling, search results, and the Watchtower dashboard.
+- Expand the Home Assistant blueprint to optionally relay `ANIMAL` and `VEHICLE` events for a camera.
+
 ## 0.4.45
 
 - Resolve ingested Home Assistant events to the correct participating NVR channel by camera name before building timeline entries and buffered clips.

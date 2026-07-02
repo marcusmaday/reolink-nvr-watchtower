@@ -32,6 +32,7 @@ if [ -f "$CONFIG_PATH" ]; then
     export WATCH_CHANNELS=$(jq -r '.watch_channels // "all"' "$CONFIG_PATH")
     export BUFFER_CHANNELS=$(jq -r '.buffer_channels // empty' "$CONFIG_PATH")
     export DEFAULT_LIVE_CHANNEL=$(jq -r '.default_live_channel // empty' "$CONFIG_PATH")
+    export CAMERA_EVENT_TYPES=$(jq -r '.camera_event_types // empty' "$CONFIG_PATH")
     
     echo "Configuration:"
     echo "  API Port: $API_PORT"
@@ -44,6 +45,7 @@ if [ -f "$CONFIG_PATH" ]; then
     echo "  Watch Channels: $WATCH_CHANNELS"
     echo "  Buffer Channels: ${BUFFER_CHANNELS:-watch_channels}"
     echo "  Default Live Channel: ${DEFAULT_LIVE_CHANNEL:-auto}"
+    echo "  Camera Event Types: ${CAMERA_EVENT_TYPES:-all}"
     echo "  API Host: $API_HOST"
     echo "  Allow CORS: $ALLOW_CORS"
     echo "  External Storage: ${EXTERNAL_STORAGE_PATH:-none}"

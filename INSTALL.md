@@ -38,6 +38,7 @@ clip_quality: medium
 watch_channels: "all"
 buffer_channels: ""
 default_live_channel: -1
+camera_event_types: ""
 retention_days: 7
 max_storage_mb: 5000
 external_storage_path: ""
@@ -53,6 +54,7 @@ Notes:
 - `watch_channels` controls which NVR channels participate in Watchtower. Use `all` or a comma-separated list like `0,1,8`.
 - `buffer_channels` lets you keep pre-roll buffers on only a subset of participating cameras. Leave it blank to reuse `watch_channels`.
 - `default_live_channel` chooses the fallback camera for live view. Set `-1` to auto-select the first participating camera.
+- `camera_event_types` lets you restrict which event types are accepted per camera. Leave it blank for all supported event types on every participating camera, or use a mapping like `all:PERSON,DOORBELL;0:PERSON,VEHICLE;1:PERSON,ANIMAL;8:PERSON,DOORBELL`.
 
 Restart the add-on after saving the configuration.
 
@@ -77,10 +79,12 @@ Then create an automation from the blueprint and choose:
 
 1. Your doorbell sensor
 2. Your person sensor
-3. Your snapshot camera
-4. Your front door lock
-5. Your two mobile notify services
-6. Your app navigation path or URL
+3. Optional animal sensors
+4. Optional vehicle sensors
+5. Your snapshot camera
+6. Your front door lock
+7. Your two mobile notify services
+8. Your app navigation path or URL
 
 Recommended value:
 
@@ -93,6 +97,8 @@ The blueprint converts that to a `homeassistant://navigate/...` mobile deep link
 The blueprint handles:
 
 - snapshot thumbnails
+- relay into the Watchtower timeline
+- `PERSON`, `DOORBELL`, optional `ANIMAL`, and optional `VEHICLE` notifications for that camera
 - tap-to-open event clips
 - tap-to-open live view
 - `UNLOCK_DOOR` for doorbell notifications

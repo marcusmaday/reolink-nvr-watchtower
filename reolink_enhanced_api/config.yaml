@@ -1,5 +1,5 @@
 name: "Watchtower"
-version: "0.4.45"
+version: "0.4.46"
 description: "Camera event dashboard, clip playback, and live view for a Reolink NVR"
 slug: "watchtower"
 url: "https://github.com/marcusmaday/reolink-nvr-watchtower"
@@ -36,6 +36,7 @@ options:
   watch_channels: "all"
   buffer_channels: ""
   default_live_channel: -1
+  camera_event_types: ""
   retention_days: 7
   max_storage_mb: 5000
   external_storage_path: ""
@@ -57,6 +58,7 @@ schema:
   watch_channels: "str"
   buffer_channels: "str"
   default_live_channel: "int(-1,64)"
+  camera_event_types: "str"
   retention_days: "int(1,90)"
   max_storage_mb: "int(100,20000)"
   external_storage_path: "str"
